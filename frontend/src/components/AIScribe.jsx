@@ -1,55 +1,103 @@
 import { useState, useRef, useEffect } from "react";
 import apiService from "../services/api.js";
 
-const SpeechRecognition = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+const SpeechRecognition = typeof window !== 'undefined'
+	? (window.SpeechRecognition || window.webkitSpeechRecognition)
+	: null;
 
 export default function AIScribe({ appointmentId, onSaved }) {
 	const [isListening, setIsListening] = useState(false);
-	const [transcript, setTranscript] = useState("");
-	const [interim, setInterim] = useState("");
-	const [saving, setSaving] = useState(false);
-	const [savedMsg, setSavedMsg] = useState("");
-	const [error, setError] = useState("");
-	const [duration, setDuration] = useState(0);
-	const recRef = useRef(null);
-	const timerRef = useRef(null);
+	const [transcript, setTranscript]   = useState("");
+	const [interim, setInterim]         = useState("");
+	const [saving, setSaving]           = useState(false);
+	const [savedMsg, setSavedMsg]       = useState("");
+	const [error, setError]             = useState("");
+	const [duration, setDuration]       = useState(0);
+	const recRef      = useRef(null);
+	const timerRef    = useRef(null);
 	const segmentsRef = useRef([]);
-	const supported = !!SpeechRecognition;
+	const supported   = !!SpeechRecognition;
 
 	useEffect(() => () => { recRef.current?.stop(); clearInterval(timerRef.current); }, []);
 
-	function startListening() {
+	async function startListening() {
 		if (!SpeechRecognition) return;
 		setError("");
+
+		// ── Mic permission check before starting ──────────────────────────────
+		try {
+			await navigator.mediaDevices.getUserMedia({ audio: true });
+		} catch {
+			setError("Microphone access denied. Please enable it in your browser settings (🔒 icon in address bar) and try again.");
+			return;
+		}
+
 		const rec = new SpeechRecognition();
-		rec.continuous = true; rec.interimResults = true; rec.lang = "en-US";
+		rec.continuous     = true;
+		rec.interimResults = true;
+		rec.lang           = "en-US";
+
 		rec.onresult = (e) => {
 			let f = "", i = "";
 			for (let x = e.resultIndex; x < e.results.length; x++) {
 				const t = e.results[x][0].transcript;
-				if (e.results[x].isFinal) { f += t + " "; segmentsRef.current.push({ speaker: "doctor", text: t.trim(), timestamp: new Date().toISOString() }); }
-				else i += t;
+				if (e.results[x].isFinal) {
+					f += t + " ";
+					segmentsRef.current.push({ speaker: "doctor", text: t.trim(), timestamp: new Date().toISOString() });
+				} else {
+					i += t;
+				}
 			}
 			if (f) setTranscript(p => p + f);
 			setInterim(i);
 		};
-		rec.onerror = (e) => { setError(`Speech error: ${e.error}`); setIsListening(false); };
-		rec.start(); recRef.current = rec; setIsListening(true);
+
+		rec.onerror = (e) => {
+			const messages = {
+				'not-allowed':  'Microphone access denied. Enable it in browser settings.',
+				'no-speech':    'No speech detected. Please speak clearly.',
+				'network':      'Network error during transcription.',
+				'audio-capture':'No microphone found. Please connect one.',
+			};
+			setError(messages[e.error] || `Speech error: ${e.error}`);
+			setIsListening(false);
+			clearInterval(timerRef.current);
+		};
+
+		rec.start();
+		recRef.current = rec;
+		setIsListening(true);
 		timerRef.current = setInterval(() => setDuration(d => d + 1), 1000);
 	}
 
-	function stopListening() { recRef.current?.stop(); setIsListening(false); setInterim(""); clearInterval(timerRef.current); }
+	function stopListening() {
+		recRef.current?.stop();
+		setIsListening(false);
+		setInterim("");
+		clearInterval(timerRef.current);
+	}
 
 	async function saveTranscript() {
 		if (!transcript.trim()) return setError("No transcript to save.");
-		setSaving(true); setSavedMsg("");
+		setSaving(true);
+		setSavedMsg("");
 		try {
-			await apiService.saveTranscript({ appointmentId, rawText: transcript, segments: segmentsRef.current, durationSeconds: duration });
-			setSavedMsg("✅ Transcript saved."); onSaved?.({ transcript, duration });
-		} catch (e) { setError("Save failed: " + e.message); } finally { setSaving(false); }
+			await apiService.saveTranscript({
+				appointmentId,
+				rawText:         transcript,
+				segments:        segmentsRef.current,
+				durationSeconds: duration
+			});
+			setSavedMsg("✅ Transcript saved successfully.");
+			onSaved?.({ transcript, duration });
+		} catch (e) {
+			setError("Save failed: " + e.message);
+		} finally {
+			setSaving(false);
+		}
 	}
 
-	const fmt = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+	const fmt = (s) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`;
 
 	return (
 		<div className="card">
@@ -66,34 +114,68 @@ export default function AIScribe({ appointmentId, onSaved }) {
 				)}
 			</div>
 
-			{!supported && <div className="bg-amber-50 border border-amber-200 text-amber-700 rounded-clinical px-4 py-2 text-sm mb-3">⚠️ Speech recognition requires Chrome or Edge.</div>}
-			{error && <div className="bg-danger-50 border border-danger-200 text-danger-700 rounded-clinical px-4 py-2 text-sm mb-3">{error}</div>}
-			{savedMsg && <div className="bg-success-50 border border-success-200 text-success-700 rounded-clinical px-4 py-2 text-sm mb-3">{savedMsg}</div>}
+			{/* Browser support warning */}
+			{!supported && (
+				<div className="bg-amber-50 border border-amber-200 text-amber-700 rounded-clinical px-4 py-2 text-sm mb-3">
+					⚠️ Speech recognition requires Chrome or Edge. Other browsers are not supported.
+				</div>
+			)}
 
-			{/* Transcript */}
+			{/* Error */}
+			{error && (
+				<div className="bg-danger-50 border border-danger-200 text-danger-700 rounded-clinical px-4 py-2 text-sm mb-3 flex items-start gap-2">
+					<span className="shrink-0 mt-0.5">⚠️</span>
+					<span>{error}</span>
+				</div>
+			)}
+
+			{/* Success */}
+			{savedMsg && (
+				<div className="bg-success-50 border border-success-200 text-success-700 rounded-clinical px-4 py-2 text-sm mb-3">
+					{savedMsg}
+				</div>
+			)}
+
+			{/* Transcript area */}
 			<div className="bg-gray-50 border border-gray-100 rounded-clinical p-4 min-h-[120px] max-h-[220px] overflow-y-auto text-sm mb-4 whitespace-pre-wrap">
 				{transcript || interim ? (
-					<><span className="text-text-primary">{transcript}</span>{interim && <span className="text-text-secondary italic">{interim}</span>}</>
+					<>
+						<span className="text-text-primary">{transcript}</span>
+						{interim && <span className="text-text-secondary italic">{interim}</span>}
+					</>
 				) : (
-					<span className="text-gray-400 italic">{isListening ? "Listening… speak now" : "Press Start to begin"}</span>
+					<span className="text-gray-400 italic">
+						{isListening ? "Listening… speak now" : "Press Start to begin transcription"}
+					</span>
 				)}
 			</div>
 
 			{/* Controls */}
 			<div className="flex gap-2 flex-wrap">
 				{!isListening ? (
-					<button onClick={startListening} disabled={!supported} className="btn-primary btn-sm">▶ Start Recording</button>
+					<button onClick={startListening} disabled={!supported} className="btn-primary btn-sm">
+						▶ Start Recording
+					</button>
 				) : (
-					<button onClick={stopListening} className="btn-danger btn-sm">⏹ Stop</button>
+					<button onClick={stopListening} className="btn-danger btn-sm">
+						⏹ Stop
+					</button>
 				)}
 				<button onClick={saveTranscript} disabled={saving || !transcript.trim()} className="btn-secondary btn-sm">
 					{saving ? "Saving…" : "💾 Save Transcript"}
 				</button>
-				<button onClick={() => { setTranscript(""); setInterim(""); segmentsRef.current = []; setDuration(0); setSavedMsg(""); setError(""); }}
-					disabled={isListening} className="btn-ghost btn-sm">🗑 Clear</button>
+				<button
+					onClick={() => { setTranscript(""); setInterim(""); segmentsRef.current = []; setDuration(0); setSavedMsg(""); setError(""); }}
+					disabled={isListening}
+					className="btn-ghost btn-sm"
+				>
+					🗑 Clear
+				</button>
 			</div>
 
-			<p className="text-[11px] text-text-secondary mt-3">⚕️ AI-generated transcript. Review for accuracy before use.</p>
+			<p className="text-[11px] text-text-secondary mt-3">
+				⚕️ AI-generated transcript. Review for accuracy before clinical use.
+			</p>
 		</div>
 	);
 }

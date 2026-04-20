@@ -1,6 +1,1 @@
-export const USER_ROLES = ["DOCTOR", "PATIENT", "NURSE", "ADMIN", "PHARMACY"];
-
-
-
-
-
+export const USER_ROLES = ["DOCTOR", "PATIENT", "ADMIN", "PHARMACY"];

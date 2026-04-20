@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import Sidebar from './Sidebar.jsx';
 import Topbar from './Topbar.jsx';
+import RAGChatbot from '../components/RAGChatbot.jsx';
 
 export default function AppLayout({ children, role, activeTab, onTabChange, userName }) {
 	const [sidebarOpen, setSidebarOpen] = useState(false);
+	const [chatOpen, setChatOpen]       = useState(false);
 
 	return (
 		<div className="flex h-screen bg-background overflow-hidden">
@@ -37,6 +39,33 @@ export default function AppLayout({ children, role, activeTab, onTabChange, user
 					</div>
 				</main>
 			</div>
+
+			{/* ── Floating AI Chatbot (Patient only) ── */}
+			{role === 'PATIENT' && (
+				<div className="fixed bottom-6 right-6 z-50">
+					{chatOpen ? (
+						<div className="animate-slide-up">
+							<div className="flex justify-end mb-2">
+								<button
+									onClick={() => setChatOpen(false)}
+									className="w-7 h-7 rounded-full bg-gray-800 text-white text-xs flex items-center justify-center hover:bg-gray-700 shadow-lg"
+								>
+									✕
+								</button>
+							</div>
+							<RAGChatbot />
+						</div>
+					) : (
+						<button
+							onClick={() => setChatOpen(true)}
+							className="w-14 h-14 rounded-full bg-primary-600 hover:bg-primary-700 text-white shadow-clinical-lg flex items-center justify-center text-2xl transition-all hover:scale-110 active:scale-95"
+							title="Ask AI Assistant"
+						>
+							🤖
+						</button>
+					)}
+				</div>
+			)}
 		</div>
 	);
 }

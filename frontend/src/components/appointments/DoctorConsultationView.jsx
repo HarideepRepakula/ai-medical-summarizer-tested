@@ -207,15 +207,24 @@ function PatientQueriesTab({ appointmentId }) {
 
 // ── Main Doctor Consultation View ─────────────────────────────────────────────
 export default function DoctorConsultationView({ appointment, onBack }) {
-	const [activeTab, setActiveTab] = useState('reports');
-	const [aiSummary, setAiSummary] = useState(null);
+	const [activeTab, setActiveTab]         = useState('reports');
+	const [aiSummary, setAiSummary]         = useState(null);
 	const [loadingSummary, setLoadingSummary] = useState(true);
-	const [summaryError, setSummaryError] = useState('');
+	const [summaryError, setSummaryError]   = useState('');
 	const [uploadedFiles, setUploadedFiles] = useState(appointment?.linkedRecords || []);
 	const [meetingActive, setMeetingActive] = useState(false);
-	const [isRecording, setIsRecording] = useState(false);
+	const [isRecording, setIsRecording]     = useState(false);
+	// AI Scribe state
+	const [scribeText, setScribeText]       = useState('');
+	const [scribeSaved, setScribeSaved]     = useState(false);
 	const mediaRecorderRef = useRef(null);
-	const audioChunksRef = useRef([]);
+	const audioChunksRef   = useRef([]);
+	const scribeRef        = useRef(null);
+	const scribeTimerRef   = useRef(null);
+	const scribeSegments   = useRef([]);
+	const [scribeDuration, setScribeDuration] = useState(0);
+	const [scribeListening, setScribeListening] = useState(false);
+	const SpeechRecognition = typeof window !== 'undefined' ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
 
 	const timer = useConsultationTimer(
 		appointment?.date,
@@ -263,6 +272,25 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 			mediaRecorderRef.current = mediaRecorder;
 			mediaRecorder.start(1000);
 			setIsRecording(true);
+			// Also start speech recognition for live transcription
+			if (SpeechRecognition) {
+				const rec = new SpeechRecognition();
+				rec.continuous = true; rec.interimResults = true; rec.lang = 'en-US';
+				rec.onresult = (e) => {
+					let final = '';
+					for (let x = e.resultIndex; x < e.results.length; x++) {
+						if (e.results[x].isFinal) {
+							final += e.results[x][0].transcript + ' ';
+							scribeSegments.current.push({ speaker: 'doctor', text: e.results[x][0].transcript.trim(), timestamp: new Date().toISOString() });
+						}
+					}
+					if (final) setScribeText(p => p + final);
+				};
+				rec.start();
+				scribeRef.current = rec;
+				scribeTimerRef.current = setInterval(() => setScribeDuration(d => d + 1), 1000);
+				setScribeListening(true);
+			}
 		} catch (err) { console.error('Recording failed:', err); }
 	}
 
@@ -272,15 +300,32 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 			mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
 			setIsRecording(false);
 		}
+		if (scribeRef.current) {
+			scribeRef.current.stop();
+			scribeRef.current = null;
+			clearInterval(scribeTimerRef.current);
+			setScribeListening(false);
+		}
 	}
 
 	async function endMeeting() {
 		stopRecording();
 		setMeetingActive(false);
 		try {
+			// Save transcript first if we have scribe text
+			if (scribeText.trim()) {
+				await apiService.saveTranscript({
+					appointmentId: appointment.id,
+					rawText: scribeText,
+					segments: scribeSegments.current,
+					durationSeconds: scribeDuration
+				});
+				setScribeSaved(true);
+			}
+			// Complete consultation with actual transcript
 			await apiService.completeConsultation(appointment.id, {
-				rawText: '[Meeting completed — transcript processing...]',
-				durationSeconds: 0,
+				rawText: scribeText || '[Meeting completed — no transcript captured]',
+				durationSeconds: scribeDuration,
 				hasAudio: audioChunksRef.current.length > 0
 			});
 		} catch (err) { console.error('End meeting error:', err); }
@@ -520,6 +565,18 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 								<p className="text-[10px] text-text-secondary mt-3 text-center">
 									🔴 Audio is being captured for AI transcript generation.
 								</p>
+								{/* Live Transcript Display */}
+								{scribeListening && scribeText && (
+									<div className="mt-4 p-3 bg-gray-50 border border-gray-200 rounded-clinical max-h-32 overflow-y-auto">
+										<p className="text-[10px] font-semibold text-text-secondary uppercase tracking-wider mb-1">🎙️ Live Transcript</p>
+										<p className="text-xs text-text-primary whitespace-pre-wrap">{scribeText}</p>
+									</div>
+								)}
+								{scribeSaved && (
+									<div className="mt-3 bg-success-50 border border-success-200 text-success-700 rounded-clinical px-3 py-2 text-xs">
+										✅ Transcript saved ({Math.floor(scribeDuration / 60)}m {scribeDuration % 60}s)
+									</div>
+								)}
 							</div>
 						)}
 					</div>

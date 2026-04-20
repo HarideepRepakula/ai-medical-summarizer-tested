@@ -8,6 +8,31 @@ import { PharmacyOrderModel } from "../models/PharmacyOrder.js";
 import { InventoryModel }     from "../models/Inventory.js";
 import { UserModel }          from "../models/User.js";
 
+// ─── Get Inventory Products (for store browsing) ────────────────────────────
+
+/**
+ * GET /api/pharmacy/products
+ * Returns inventory items for the pharmacy store.
+ * Query: ?category=Antibiotics
+ */
+export async function getProducts(req, res) {
+	try {
+		const { category } = req.query;
+		const filter = { isActive: true, stock: { $gt: 0 } };
+		if (category && category !== 'All') filter.category = category;
+
+		const products = await InventoryModel.find(filter)
+			.select('name genericName brand category dosageStrength unit stock price image status')
+			.sort({ name: 1 })
+			.lean();
+
+		res.json({ success: true, data: { products, count: products.length } });
+	} catch (error) {
+		console.error('Get products error:', error.message);
+		res.status(500).json({ success: false, error: 'Failed to fetch products.' });
+	}
+}
+
 // ─── Auto-Cart Creation ───────────────────────────────────────────────────────
 
 /**

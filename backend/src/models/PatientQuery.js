@@ -2,14 +2,15 @@ import mongoose, { Schema } from 'mongoose';
 
 const PatientQuerySchema = new Schema(
 	{
-		appointmentId:  { type: Schema.Types.ObjectId, ref: 'Appointment', required: true, index: true },
-		patientId:      { type: Schema.Types.ObjectId, ref: 'User',        required: true },
-		doctorId:       { type: Schema.Types.ObjectId, ref: 'User',        required: true },
-		question:       { type: String, required: true, maxlength: 2000 },
-		doctorResponse: { type: String, default: '' },
-		respondedAt:    { type: Date },
-		escalatedAt:    { type: Date, default: Date.now },
-		status:         { type: String, enum: ['pending', 'answered'], default: 'pending' }
+		appointmentId:    { type: Schema.Types.ObjectId, ref: 'Appointment', required: true, index: true },
+		patientId:        { type: Schema.Types.ObjectId, ref: 'User',        required: true },
+		doctorId:         { type: Schema.Types.ObjectId, ref: 'User',        required: true },
+		question:         { type: String, required: true, maxlength: 2000 },
+		aiProvidedAnswer: { type: String, default: '' },
+		doctorResponse:   { type: String, default: '' },
+		respondedAt:      { type: Date },
+		escalatedAt:      { type: Date, default: Date.now },
+		status:           { type: String, enum: ['pending', 'answered'], default: 'pending' }
 	},
 	{ timestamps: true }
 );

@@ -30,19 +30,23 @@ async function generate(prompt) {
 	return response.response.trim();
 }
 
-function stripFences(text) {
-	return text
-		.replace(/^```json\s*/i, "")
-		.replace(/^```\s*/i, "")
-		.replace(/```\s*$/i, "")
-		.trim();
-}
-
 function safeJson(text, fallback) {
 	try {
-		return JSON.parse(stripFences(text));
-	} catch {
-		console.error("[OLLAMA] JSON parse failed:", text.substring(0, 200));
+		// Step 1: Remove markdown code fences
+		let cleaned = text.replace(/```json/g, "").replace(/```/g, "").trim();
+
+		// Step 2: Extract only the JSON object between first { and last }
+		const start = cleaned.indexOf('{');
+		const end   = cleaned.lastIndexOf('}');
+
+		if (start === -1 || end === -1) {
+			console.error("[OLLAMA] No JSON object found in response");
+			return fallback;
+		}
+
+		return JSON.parse(cleaned.substring(start, end + 1));
+	} catch (err) {
+		console.error("[OLLAMA] Parsing failed. Raw snippet:", text.substring(0, 100));
 		return fallback;
 	}
 }
@@ -161,34 +165,39 @@ Return ONLY valid JSON:
 }
 
 /**
- * RAG-based chatbot response using patient's medical context.
+ * Hybrid AI Assistant:
+ * Uses personal records for context but falls back to general medical knowledge.
  */
 export async function generateChatbotResponse({ userMessage, context }) {
-	const prompt = `You are MedHub AI, a patient health assistant.
-You ONLY answer questions about the patient's own medical records provided below.
-Be concise, empathetic, and always recommend consulting a doctor for medical decisions.
+	const hasRecords = context && context.length > 50 && context !== 'No history available.';
 
-PATIENT MEDICAL CONTEXT:
-${context.substring(0, 3500)}
+	const prompt = `You are ClinIQ AI, a professional and empathetic clinical health assistant.
 
-PATIENT QUESTION: ${userMessage}
+PATIENT HISTORY:
+${hasRecords ? context.substring(0, 3000) : 'No previous medical records found for this patient.'}
 
-Instructions:
-- Answer based ONLY on the provided context
-- If information is not in the context, say "I don't have that information in your records"
-- Never diagnose or prescribe
-- Keep response under 150 words`;
+USER QUESTION: "${userMessage}"
+
+GOAL:
+- If the answer is in the PATIENT HISTORY above, use it to give a personalised response.
+- If the PATIENT HISTORY is empty or does not contain the answer, use your general medical knowledge.
+- For symptoms like headache or stomach pain, suggest possible causes, home remedies, and which specialist to see.
+- For emergencies like chest pain or difficulty breathing, advise calling emergency services immediately.
+- Always end with a Possible Next Steps section.
+
+RULES:
+1. Be concise, empathetic, and use bullet points for readability.
+2. Never give a definitive diagnosis or specific drug dosages.
+3. Always recommend consulting a doctor for final decisions.
+4. Keep response under 200 words.`;
 
 	const answer = await generate(prompt);
 	return {
 		answer,
-		disclaimer: "⚕️ This AI assistant provides information based on your records only and does not constitute medical advice."
+		disclaimer: '⚕️ AI-generated guidance. Consult a doctor for medical decisions.'
 	};
 }
 
-/**
- * Generate AI Health Insights from latest lab results.
- */
 export async function generateHealthInsights(labResults) {
 	if (!labResults || labResults.length === 0) {
 		return [
@@ -319,4 +328,103 @@ Generate a post-consultation summary in JSON format only (no markdown):
 		meetingSummary: text.substring(0, 500), medicines: [],
 		keyDecisions: [], diagnosis: "See transcript", followUp: "Consult your doctor"
 	});
+}
+
+// ── AI Admin Functions ────────────────────────────────────────────────────────
+
+/**
+ * AI Admin: Credential Verification
+ * OCR text from doctor's license → LLM decision: approved | rejected
+ */
+export async function aiAdminVerifyDoctor(doctorData, licenseOcrText) {
+	const prompt = `You are the MedHub AI System Administrator.
+Your task is to verify if a doctor's registration data matches their uploaded medical license.
+
+REGISTRATION DATA:
+- Name: ${doctorData.name}
+- Specialty: ${doctorData.specialty}
+- Claimed License Number: ${doctorData.licenseNumber || 'Not provided'}
+
+EXTRACTED TEXT FROM LICENSE PHOTO (OCR):
+"${licenseOcrText.substring(0, 2000)}"
+
+RULES:
+1. The name on the license must closely match the registration name.
+2. The license number must appear somewhere in the OCR text (if provided).
+3. The document must look like a valid medical license (not a random document).
+4. If the license looks fake, expired, or names don't match, REJECT.
+
+Return ONLY valid JSON:
+{
+  "decision": "approved" | "rejected",
+  "confidenceScore": 0-100,
+  "reason": "short explanation of your decision",
+  "nameMatch": true | false,
+  "licenseNumberFound": true | false
+}`;
+
+	const text = await generate(prompt);
+	return safeJson(text, { decision: "rejected", confidenceScore: 0, reason: "AI Admin verification error — manual review required", nameMatch: false, licenseNumberFound: false });
+}
+
+/**
+ * AI Admin: System Health Report
+ * Analyzes appointments + security logs → generates platform health summary
+ */
+export async function aiAdminSystemReport({ appointments, recentLogins, flaggedUsers }) {
+	const apptSummary = `Total: ${appointments.total}, Completed: ${appointments.completed}, Cancelled: ${appointments.cancelled}, Pending: ${appointments.pending}`;
+	const loginSummary = `Total logins (24h): ${recentLogins.total}, Failed: ${recentLogins.failed}, Locked accounts: ${recentLogins.locked}`;
+	const flagSummary  = flaggedUsers.length > 0 ? flaggedUsers.map(u => `${u.email} — ${u.reason}`).join('; ') : 'None';
+
+	const prompt = `You are the MedHub AI System Administrator generating a platform health report.
+
+SYSTEM METRICS (last 24 hours):
+- Appointments: ${apptSummary}
+- Login Activity: ${loginSummary}
+- Flagged Users: ${flagSummary}
+
+Generate a concise system health report in JSON only:
+{
+  "overallHealth": "healthy|warning|critical",
+  "summary": "2-3 sentence platform status overview",
+  "securityAlerts": ["alert1", "alert2"],
+  "recommendations": ["action1", "action2"],
+  "metrics": {
+    "appointmentCompletionRate": "percentage string",
+    "loginSuccessRate": "percentage string",
+    "activeThreats": 0
+  }
+}`;
+
+	const text = await generate(prompt);
+	return safeJson(text, {
+		overallHealth: "warning",
+		summary: "System report generation failed. Manual review recommended.",
+		securityAlerts: [],
+		recommendations: ["Check system logs manually"],
+		metrics: { appointmentCompletionRate: "N/A", loginSuccessRate: "N/A", activeThreats: 0 }
+	});
+}
+
+/**
+ * AI Admin: Medical Record Content Moderation
+ * Flags records that contain non-medical or inappropriate content
+ */
+export async function aiAdminModerateRecord(recordName, ocrText) {
+	const prompt = `You are the MedHub AI Content Moderator.
+Review this medical record and determine if it contains legitimate medical content.
+
+Record Name: "${recordName}"
+Content Preview: "${ocrText.substring(0, 1000)}"
+
+Return ONLY valid JSON:
+{
+  "isMedical": true | false,
+  "flagged": true | false,
+  "reason": "brief explanation",
+  "contentType": "lab_report|prescription|scan|non_medical|unknown"
+}`;
+
+	const text = await generate(prompt);
+	return safeJson(text, { isMedical: true, flagged: false, reason: "Moderation check skipped", contentType: "unknown" });
 }

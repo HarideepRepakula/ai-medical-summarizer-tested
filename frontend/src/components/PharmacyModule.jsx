@@ -105,7 +105,7 @@ export default function PharmacyModule() {
 					<div className="space-y-2 mb-4">
 						{order.medicines?.map((med, idx) => (
 							<div key={idx} className={`flex items-center justify-between py-2 px-3 rounded-lg border transition-all ${
-								med.deselected ? 'bg-gray-50 border-gray-100 opacity-50' : 'bg-white border-gray-150'
+								med.deselected ? 'bg-gray-50 border-gray-100 opacity-25' : 'bg-white border-gray-150'
 							}`}>
 								<div className="flex items-center gap-3">
 									{order.status === 'pending_patient_review' && (

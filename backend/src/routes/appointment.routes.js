@@ -10,6 +10,8 @@ import {
 	getDoctorAvailability,
 	cleanupExpiredReservations,
 	getAppointmentLockState,
+	getConsultationState,
+	getConsultationData,
 	getAiSummary,
 	updateAiSummary,
 	uploadConsultationRecord,
@@ -45,6 +47,9 @@ const consultUpload = multer({
 // All routes require authentication
 router.use(authenticate);
 
+// Doctor availability — MUST be before /:id routes to avoid param conflict
+router.get('/availability', getDoctorAvailability);
+
 // Core appointment operations
 router.post('/book',           validateAppointmentBooking, bookAppointment);
 router.get('/',                getAppointments);
@@ -53,7 +58,9 @@ router.delete('/:id/cancel',   cancelAppointment);
 router.post('/:id/reschedule', rescheduleAppointment);
 
 // Lock state
-router.get('/:id/lock-state',  getAppointmentLockState);
+router.get('/:id/lock-state',         getAppointmentLockState);
+router.get('/:id/consultation-state', getConsultationState);
+router.get('/:id/consultation-data',  getConsultationData);  // unified run-once endpoint
 
 // Consultation lifecycle
 router.get('/:id/ai-summary',                    getAiSummary);
@@ -65,9 +72,6 @@ router.get('/:id/records',                       getConsultationRecords);
 // Patient queries (escalated from AI chatbot)
 router.get('/:id/patient-queries',                          getPatientQueries);
 router.post('/:id/patient-queries/:queryId/respond',        respondToPatientQuery);
-
-// Doctor availability
-router.get('/availability', getDoctorAvailability);
 
 // Admin
 router.post('/cleanup', cleanupExpiredReservations);

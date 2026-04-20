@@ -38,7 +38,7 @@ export default function AIHealthInsights() {
 					<h4 className="font-bold text-text-primary">✨ AI Health Insights</h4>
 					{basedOn && <p className="text-xs text-text-secondary mt-0.5">Based on: {basedOn}</p>}
 				</div>
-				<span className="badge-ai text-[10px]">Gemini AI</span>
+				<span className="badge-ai text-[10px]">AI Powered</span>
 			</div>
 
 			{error && <p className="text-sm text-danger-500 mb-3">{error}</p>}

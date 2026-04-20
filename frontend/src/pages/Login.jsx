@@ -26,7 +26,7 @@ export default function Login() {
 				authService.setAccessToken(res.accessToken);
 			}
 			const role = res.user?.role || 'PATIENT';
-			const routes = { PATIENT: '/patient', DOCTOR: '/doctor', ADMIN: '/admin', NURSE: '/nurse', PHARMACY: '/pharmacy' };
+			const routes = { PATIENT: '/patient', DOCTOR: '/doctor', ADMIN: '/admin', PHARMACY: '/pharmacy' };
 			navigate(routes[role] || '/patient');
 		} catch (err) {
 			const msg = err.message || 'Login failed';

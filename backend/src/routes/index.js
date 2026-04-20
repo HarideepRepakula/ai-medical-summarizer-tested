@@ -10,6 +10,7 @@ import pharmacyRoutes      from "./pharmacy.routes.js";
 import chatbotRoutes       from "./chatbot.routes.js";
 import prescriptionRoutes  from "./prescription.routes.js";
 import notificationRoutes  from "./notification.routes.js";
+import adminRoutes         from "./admin.routes.js";
 import { authenticate }    from "../middleware/auth.js";
 
 const router = Router();
@@ -32,5 +33,6 @@ router.use("/pharmacy",      authenticate, pharmacyRoutes);
 router.use("/chatbot",       authenticate, chatbotRoutes);
 router.use("/prescriptions", authenticate, prescriptionRoutes);
 router.use("/notifications", authenticate, notificationRoutes);
+router.use("/admin",         authenticate, adminRoutes);
 
 export default router;

@@ -14,6 +14,7 @@ async function bootstrap() {
 		console.log('Connected to MongoDB');
 		
 		const server = createServer(app);
+		server.timeout = 120000; // 2 minutes for long-running AI requests
 		server.listen(port, () => {
 			console.log(`MedHub API running on http://localhost:${port}`);
 		});

@@ -2,6 +2,8 @@ import { authService } from "../services/authService.js";
 import { UserModel } from "../models/User.js";
 import { RefreshTokenModel } from "../models/RefreshToken.js";
 import { USER_ROLES } from "../types/roles.js";
+import Tesseract from "tesseract.js";
+import { aiAdminVerifyDoctor } from "../services/ollamaService.js";
 
 function getClientInfo(req) {
 	return {
@@ -32,15 +34,47 @@ export async function signup(req, res) {
 
 		console.log(`[SIGNUP-${requestId}] User created: ${user._id} role=${role}`);
 
-		// Auto-create DoctorModel profile so getDoctors() returns this doctor immediately
+		// Auto-create DoctorModel profile with AI Admin verification
 		if (role === 'DOCTOR') {
 			const { DoctorModel } = await import('../models/Doctor.js');
+
+			let isVerified         = false;
+			let verificationStatus = 'pending';
+			let verificationScore  = 0;
+			let adminNote          = 'No license uploaded — pending manual review.';
+
+			// Run AI Admin verification if license file was uploaded
+			if (req.file) {
+				try {
+					console.log(`[AI-ADMIN] Running OCR + credential check for doctor ${user._id}`);
+					const { data: { text } } = await Tesseract.recognize(req.file.path, 'eng');
+					const aiDecision = await aiAdminVerifyDoctor(
+						{ name, specialty, licenseNumber: req.body.licenseNumber },
+						text
+					);
+					verificationScore  = aiDecision.confidenceScore || 0;
+					adminNote          = aiDecision.reason || '';
+					isVerified         = aiDecision.decision === 'approved' && verificationScore > 80;
+					verificationStatus = isVerified ? 'approved' : 'rejected';
+					console.log(`[AI-ADMIN] Decision: ${verificationStatus} (score: ${verificationScore}) for ${name}`);
+				} catch (aiErr) {
+					console.error('[AI-ADMIN] Verification error:', aiErr.message);
+					adminNote = 'AI verification failed — pending manual review.';
+				}
+			}
+
 			await DoctorModel.create({
-				userId:          user._id,
-				specialty:       specialty?.trim()       || 'General Practice',
-				experience:      experience?.trim()      || '1+ years',
-				consultationFee: Number(consultationFee) || 500,
-				rating:          4.5,
+				userId:             user._id,
+				specialty:          specialty?.trim()       || 'General Physician',
+				experience:         experience?.trim()      || '1+ years',
+				consultationFee:    Number(consultationFee) || 500,
+				licenseNumber:      req.body.licenseNumber  || '',
+				rating:             4.5,
+				isVerified,
+				verificationStatus,
+				verificationScore,
+				adminNote,
+				verifiedAt:         isVerified ? new Date() : undefined,
 				availability: [
 					{ day: 'Monday',    startTime: '09:00', endTime: '17:00' },
 					{ day: 'Tuesday',   startTime: '09:00', endTime: '17:00' },
@@ -49,7 +83,7 @@ export async function signup(req, res) {
 					{ day: 'Friday',    startTime: '09:00', endTime: '17:00' }
 				]
 			});
-			console.log(`[SIGNUP-${requestId}] DoctorModel profile created for ${user._id}`);
+			console.log(`[SIGNUP-${requestId}] DoctorModel profile created for ${user._id} | verified=${isVerified}`);
 		}
 
 		const tokenFamily  = authService.generateTokenFamily();

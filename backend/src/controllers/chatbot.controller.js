@@ -11,13 +11,11 @@ import { AppointmentModel }   from "../models/Appointment.js";
 import { generateChatbotResponse } from "../services/ollamaService.js";
 import { notifyEmergencyEscalation } from "../services/notificationService.js";
 
-// ─── Ask Chatbot ──────────────────────────────────────────────────────────────
+// ─── Ask Chatbot (General) ────────────────────────────────────────────────────
 
 /**
  * POST /api/chatbot/ask
- * RAG chatbot: retrieves patient's medical history + transcripts as context,
- * then sends to Gemini for a grounded response.
- *
+ * RAG chatbot using patient's full medical history as context.
  * Body: { message }
  */
 export async function askChatbot(req, res) {
@@ -29,7 +27,6 @@ export async function askChatbot(req, res) {
 			return res.status(400).json({ success: false, error: "Message is required." });
 		}
 
-		// ── Build RAG Context ────────────────────────────────────────────────
 		const [transcripts, labResults, prescriptions] = await Promise.all([
 			TranscriptModel.find({ patientId }).sort({ createdAt: -1 }).limit(3).lean(),
 			LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(3).lean(),
@@ -38,7 +35,6 @@ export async function askChatbot(req, res) {
 
 		let context = "";
 
-		// Transcripts
 		if (transcripts.length > 0) {
 			context += "=== CONSULTATION TRANSCRIPTS ===\n";
 			transcripts.forEach((t, i) => {
@@ -47,7 +43,6 @@ export async function askChatbot(req, res) {
 			});
 		}
 
-		// Lab Results
 		if (labResults.length > 0) {
 			context += "=== RECENT LAB RESULTS ===\n";
 			labResults.forEach((lr, i) => {
@@ -59,7 +54,6 @@ export async function askChatbot(req, res) {
 			});
 		}
 
-		// Prescriptions
 		if (prescriptions.length > 0) {
 			context += "=== ACTIVE PRESCRIPTIONS ===\n";
 			prescriptions.forEach((p, i) => {
@@ -71,32 +65,15 @@ export async function askChatbot(req, res) {
 			});
 		}
 
-		if (!context) {
-			return res.json({
-				success: true,
-				data: {
-					answer:     "I don't have any medical records on file for you yet. Please upload a lab report or complete a consultation first.",
-					disclaimer: "⚕️ This AI assistant is for informational purposes only. Always consult your doctor."
-				}
-			});
-		}
+		if (!context) context = "No history available.";
 
-		// ── Generate Response ────────────────────────────────────────────────
-		const response = await generateChatbotResponse({
-			userMessage: message,
-			context
-		});
-
-		res.json({ success: true, data: response });
+		// ── Generate Response ───────────────────────────────────────────────────────────────────
+		const response = await generateChatbotResponse({ userMessage: message, context });
+		res.json({ success: true, data: { ...response, canEscalate: true } });
 
 	} catch (error) {
 		console.error("Chatbot ask error:", error.message);
-
-		if (error.message?.includes("GEMINI_API_KEY")) {
-			return res.status(503).json({ success: false, error: "AI service not configured." });
-		}
-
-		res.status(500).json({ success: false, error: "Chatbot unavailable. Please try again." });
+		res.status(500).json({ success: false, error: "Chatbot is unavailable. Please try again in a moment." });
 	}
 }
 
@@ -104,66 +81,59 @@ export async function askChatbot(req, res) {
 
 /**
  * POST /api/chatbot/escalate
- * Patient flags an emergency from the chatbot.
- * Sets emergencyEscalated on the patient's most recent appointment.
- * Sends an in-app notification to the doctor.
- *
- * Body: { appointmentId? } — optional, uses most recent if not provided
+ * Body: { appointmentId?, question, aiAnswer? }
  */
 export async function escalateToDoctor(req, res) {
 	try {
-		const patientId     = req.user.userId;
-		const { appointmentId, question } = req.body;
+		const patientId = req.user.userId;
+		const { appointmentId, question, aiAnswer } = req.body;
 
-		// Find the appointment to escalate
 		let appointment;
 		if (appointmentId) {
 			appointment = await AppointmentModel.findById(appointmentId);
 		} else {
 			appointment = await AppointmentModel.findOne({
 				patientId,
-				status: { $in: ["pending", "confirmed", "in_progress"] }
+				status: { $in: ["pending", "confirmed", "in_progress", "completed"] }
 			}).sort({ appointmentDate: -1 });
 		}
 
 		if (!appointment) {
 			return res.status(404).json({
 				success: false,
-				error: "No active appointment found. Please contact the clinic directly."
+				error: "No appointment found. Please contact the clinic directly."
 			});
 		}
 
-		// Save the escalated query to PatientQuery collection
 		const { PatientQueryModel } = await import('../models/PatientQuery.js');
 		const savedQuery = await PatientQueryModel.create({
-			appointmentId: appointment._id,
+			appointmentId:    appointment._id,
 			patientId,
-			doctorId:    appointment.doctorId,
-			question:    question?.trim() || 'Patient escalated a query from the AI chatbot.',
-			status:      'pending',
-			escalatedAt: new Date()
+			doctorId:         appointment.doctorId,
+			question:         question?.trim() || 'Patient escalated a query from the AI chatbot.',
+			aiProvidedAnswer: aiAnswer?.trim() || '',
+			status:           'pending',
+			escalatedAt:      new Date()
 		});
 
-		// Mark emergency escalation on appointment
+		// Mark on appointment
 		appointment.emergencyEscalated   = true;
 		appointment.emergencyEscalatedAt = new Date();
 		await appointment.save();
 
 		// Notify doctor
 		await appointment.populate({ path: "patientId", select: "name" });
-		const patientName = appointment.patientId?.name || "A patient";
-
 		await notifyEmergencyEscalation(
 			appointment.doctorId.toString(),
-			patientName,
+			appointment.patientId?.name || "A patient",
 			appointment._id
 		);
 
-		console.log(`[CHATBOT] Query escalated: patient ${patientId} → doctor ${appointment.doctorId}`);
+		console.log(`[CHATBOT] Escalated: patient ${patientId} → doctor ${appointment.doctorId}`);
 
 		res.json({
 			success: true,
-			message: "Your doctor has been notified and will contact you shortly.",
+			message: "Your question has been sent to the doctor.",
 			data: {
 				appointmentId:  appointment._id,
 				queryId:        savedQuery._id,
@@ -174,17 +144,16 @@ export async function escalateToDoctor(req, res) {
 
 	} catch (error) {
 		console.error("Escalate error:", error.message);
-		res.status(500).json({ success: false, error: "Failed to send emergency escalation." });
+		res.status(500).json({ success: false, error: "Failed to send escalation." });
 	}
 }
 
-// ─── Consultation-Scoped Chatbot ─────────────────────────────────────────────
+// ─── Consultation-Scoped Chatbot ──────────────────────────────────────────────
 
 /**
  * POST /api/chatbot/ask-consultation
- * RAG chatbot scoped to a specific consultation's records.
- * Context: consultation transcript + meeting summary + patient historical records.
- *
+ * Post-consultation RAG chatbot scoped to a specific meeting's records.
+ * Context priority: meetingSummary → transcript → medicines → lab history
  * Body: { message, appointmentId }
  */
 export async function askConsultationChatbot(req, res) {
@@ -195,45 +164,37 @@ export async function askConsultationChatbot(req, res) {
 		if (!message?.trim()) {
 			return res.status(400).json({ success: false, error: "Message is required." });
 		}
-
 		if (!appointmentId) {
 			return res.status(400).json({ success: false, error: "appointmentId is required." });
 		}
 
-		// Fetch the specific appointment
 		const appointment = await AppointmentModel.findById(appointmentId).lean();
 		if (!appointment) {
 			return res.status(404).json({ success: false, error: "Appointment not found." });
 		}
 
-		// Auth: must be the patient
 		if (appointment.patientId.toString() !== patientId) {
 			return res.status(403).json({ success: false, error: "Unauthorized." });
 		}
 
-		// ── Build Scoped RAG Context ──────────────────────────────────────────
 		let context = "";
 
-		// 1. This consultation's transcript
-		const transcript = await TranscriptModel.findOne({ appointmentId }).lean();
-		if (transcript?.rawText) {
-			context += "=== THIS CONSULTATION TRANSCRIPT ===\n";
-			context += transcript.rawText.substring(0, 1500) + "\n\n";
+		// 1. Consultation date + reason
+		context += `=== CONSULTATION INFO ===\nDate: ${appointment.appointmentDate?.toISOString().split('T')[0]}\nReason: ${appointment.reason}\n\n`;
+
+		// 2. Doctor's meeting summary (highest priority)
+		if (appointment.consultationRecords?.meetingSummary) {
+			context += "=== DOCTOR'S MEETING SUMMARY ===\n";
+			context += appointment.consultationRecords.meetingSummary.substring(0, 1000) + "\n\n";
 		}
 
-		// 2. This consultation's AI summary
-		if (transcript?.summaryAi) {
-			context += "=== MEETING SUMMARY ===\n";
-			context += transcript.summaryAi.substring(0, 800) + "\n\n";
+		// 3. Full meeting transcript
+		if (appointment.consultationRecords?.meetingTranscript) {
+			context += "=== MEETING TRANSCRIPT ===\n";
+			context += appointment.consultationRecords.meetingTranscript.substring(0, 1500) + "\n\n";
 		}
 
-		// 3. Pre-consultation AI briefing
-		if (appointment.aiPreparedSummary?.content) {
-			context += "=== PRE-CONSULTATION BRIEFING ===\n";
-			context += appointment.aiPreparedSummary.content.substring(0, 800) + "\n\n";
-		}
-
-		// 4. Medicines from this consultation
+		// 4. Prescribed medicines from this consultation
 		if (appointment.consultationRecords?.medicines?.length > 0) {
 			context += "=== PRESCRIBED MEDICINES ===\n";
 			appointment.consultationRecords.medicines.forEach(m => {
@@ -242,7 +203,23 @@ export async function askConsultationChatbot(req, res) {
 			context += "\n";
 		}
 
-		// 5. Patient's broader medical history
+		// 5. AI transcript summary from TranscriptModel
+		const transcript = await TranscriptModel.findOne({ appointmentId }).lean();
+		if (transcript?.summaryAi) {
+			context += "=== AI TRANSCRIPT SUMMARY ===\n";
+			context += transcript.summaryAi.substring(0, 600) + "\n\n";
+		} else if (transcript?.rawText && !appointment.consultationRecords?.meetingTranscript) {
+			context += "=== CONSULTATION TRANSCRIPT ===\n";
+			context += transcript.rawText.substring(0, 1000) + "\n\n";
+		}
+
+		// 6. Pre-consultation AI briefing
+		if (appointment.aiPreparedSummary?.content) {
+			context += "=== PRE-CONSULTATION BRIEFING ===\n";
+			context += appointment.aiPreparedSummary.content.substring(0, 600) + "\n\n";
+		}
+
+		// 7. Patient's broader medical history
 		const [labResults, prescriptions] = await Promise.all([
 			LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(2).lean(),
 			PrescriptionModel.find({ patientId, status: "active" }).sort({ createdAt: -1 }).limit(2).lean()
@@ -268,31 +245,22 @@ export async function askConsultationChatbot(req, res) {
 			});
 		}
 
-		if (!context) {
+		if (!context.includes("MEETING") && !context.includes("TRANSCRIPT")) {
 			return res.json({
 				success: true,
 				data: {
-					answer: "I don't have any records for this consultation yet. If the meeting has ended, the records may still be processing.",
-					disclaimer: "⚕️ This AI assistant is for informational purposes only."
+					answer:      "I don't have any records for this consultation yet. If the meeting has ended, the records may still be processing.",
+					disclaimer:  "⚕️ This AI assistant is for informational purposes only.",
+					canEscalate: true
 				}
 			});
 		}
 
-		// ── Generate Response ────────────────────────────────────────────────
-		const response = await generateChatbotResponse({
-			userMessage: message,
-			context
-		});
-
-		res.json({ success: true, data: response });
+		const response = await generateChatbotResponse({ userMessage: message, context });
+		res.json({ success: true, data: { ...response, canEscalate: true } });
 
 	} catch (error) {
 		console.error("Consultation chatbot error:", error.message);
-
-		if (error.message?.includes("GEMINI_API_KEY")) {
-			return res.status(503).json({ success: false, error: "AI service not configured." });
-		}
-
 		res.status(500).json({ success: false, error: "Chatbot unavailable. Please try again." });
 	}
 }

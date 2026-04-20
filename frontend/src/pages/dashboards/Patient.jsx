@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import AppLayout from '../../layouts/AppLayout.jsx';
 import UpcomingAppointments from '../../components/appointments/UpcomingAppointments.jsx';
@@ -8,8 +8,8 @@ import ConsultationRecords from '../../components/appointments/ConsultationRecor
 import HealthTimeline from '../../components/HealthTimeline.jsx';
 import RAGChatbot from '../../components/RAGChatbot.jsx';
 import AIHealthInsights from '../../components/AIHealthInsights.jsx';
-import PharmacyModule from '../../components/PharmacyModule.jsx';
-import { globalState } from '../../services/globalState.js';
+import PharmacyStore from '../../components/PharmacyStore.jsx';
+import VerifiedBadge from '../../components/VerifiedBadge.jsx';
 import apiService from '../../services/api.js';
 import authService from '../../services/authService.js';
 
@@ -27,7 +27,7 @@ export default function PatientDashboard() {
 	const [selectedAppointment, setSelectedAppointment] = useState(null);
 	const [subView, setSubView] = useState(null); // 'consultation-prep' | 'consultation-records'
 
-	// Booking modal â€” step machine: 'form' | 'payment' | 'success'
+	// Booking modal –” step machine: 'form' | 'payment' | 'success'
 	const [bookingDoctor, setBookingDoctor]     = useState(null);
 	const [bookingStep, setBookingStep]         = useState('form');
 	const [bookingForm, setBookingForm]         = useState({ date: '', startTime: '', endTime: '', reason: '' });
@@ -44,6 +44,10 @@ export default function PatientDashboard() {
 	const [uploading, setUploading]           = useState(false);
 	const [uploadModal, setUploadModal]       = useState(false);
 	const [uploadForm, setUploadForm]         = useState({ recordName: '', type: 'Lab Report', file: null });
+	const [bills, setBills]                   = useState([
+		{ id: 1, title: 'Consultation Fee', amount: 500,  status: 'paid',    date: '2025-01-20' },
+		{ id: 2, title: 'Pharmacy Order',   amount: 1250, status: 'pending', date: '2025-01-22' }
+	]);
 
 	const loadLabResults = async () => {
 		setRecordsLoading(true);
@@ -69,7 +73,7 @@ export default function PatientDashboard() {
 		try {
 			const res = await apiService.uploadLabRecord(file);
 			if (res.success) {
-				setUploadMsg(`âœ… ${res.message}`);
+				setUploadMsg(`✅ ${res.message}`);
 				await loadLabResults();
 			}
 		} catch (err) {
@@ -161,10 +165,10 @@ export default function PatientDashboard() {
 
 	// â”€â”€ Booking logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 	const VISIT_TYPES = [
-		{ value: 'regular',    label: 'Regular Checkup',    icon: 'ðŸ©º', desc: 'Routine health checkup' },
-		{ value: 'follow-up',  label: 'Follow-up Visit',    icon: 'ðŸ”„', desc: 'Follow-up on previous consultation' },
-		{ value: 'emergency',  label: 'Urgent Consultation',icon: 'ðŸš¨', desc: 'Urgent medical concern' },
-		{ value: 'specialist', label: 'Specialist Referral', icon: 'ðŸ”¬', desc: 'Referred by another doctor' },
+		{ value: 'regular',    label: 'Regular Checkup',    icon: '🩺', desc: 'Routine health checkup' },
+		{ value: 'follow-up',  label: 'Follow-up Visit',    icon: '📝”„', desc: 'Follow-up on previous consultation' },
+		{ value: 'emergency',  label: 'Urgent Consultation',icon: '🚨', desc: 'Urgent medical concern' },
+		{ value: 'specialist', label: 'Specialist Referral', icon: '📝”¬', desc: 'Referred by another doctor' },
 	];
 
 	function openBookingModal(doc) {
@@ -273,10 +277,10 @@ export default function PatientDashboard() {
 					{/* KPI Cards */}
 					<div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 						{[
-							{ label: 'Appointments', value: appointments.length, icon: 'ðŸ“…', color: 'text-primary-600', bg: 'bg-primary-50' },
-							{ label: 'Medical Records', value: labResults.length, icon: 'ðŸ“‹', color: 'text-success-600', bg: 'bg-success-50' },
-							{ label: 'Pending Bills', value: `â‚¹${bills.filter(b=>b.status==='pending').reduce((s,b)=>s+b.amount,0)}`, icon: 'ðŸ’³', color: 'text-amber-600', bg: 'bg-amber-50' },
-							{ label: 'AI Assistant', value: 'Active', icon: 'ðŸ§ ', color: 'text-ai-600', bg: 'bg-ai-50' },
+							{ label: 'Appointments', value: appointments.length, icon: '📝“…', color: 'text-primary-600', bg: 'bg-primary-50' },
+							{ label: 'Medical Records', value: labResults.length, icon: '📝“‹', color: 'text-success-600', bg: 'bg-success-50' },
+							{ label: 'Pending Bills', value: `₹${bills.filter(b=>b.status==='pending').reduce((s,b)=>s+b.amount,0)}`, icon: '📝’³', color: 'text-amber-600', bg: 'bg-amber-50' },
+							{ label: 'AI Assistant', value: 'Active', icon: '📝§ ', color: 'text-ai-600', bg: 'bg-ai-50' },
 						].map((kpi, i) => (
 							<div key={i} className="card-stat">
 								<div className={`w-12 h-12 ${kpi.bg} rounded-clinical flex items-center justify-center text-xl shrink-0`}>
@@ -300,7 +304,7 @@ export default function PatientDashboard() {
 										<p className="text-sm font-medium text-text-primary">
 											{typeof apt.doctor === 'object' ? apt.doctor.name : apt.doctor}
 										</p>
-										<p className="text-xs text-text-secondary">{apt.date} â€¢ {apt.startTime || apt.time}</p>
+										<p className="text-xs text-text-secondary">{apt.date} • {apt.startTime || apt.time}</p>
 									</div>
 									<span className={`badge ${apt.status === 'confirmed' ? 'badge-success' : apt.status === 'completed' ? 'badge-gray' : 'badge-amber'}`}>
 										{apt.status?.toUpperCase()}
@@ -308,7 +312,7 @@ export default function PatientDashboard() {
 								</div>
 							)) : (
 								<div className="text-center py-8 text-text-secondary text-sm">
-									<span className="text-3xl block mb-2">ðŸ“…</span>
+									<span className="text-3xl block mb-2">📝“…</span>
 									No appointments scheduled
 								</div>
 							)}
@@ -318,10 +322,10 @@ export default function PatientDashboard() {
 							<h3 className="font-semibold text-text-primary mb-4">Quick Actions</h3>
 							<div className="grid grid-cols-2 gap-3">
 								{[
-									{ label: 'Book Appointment', icon: 'ðŸ“…', tab: 'doctors' },
-									{ label: 'Medical Records', icon: 'ðŸ“‹', tab: 'records' },
-									{ label: 'My Consultations', icon: 'ðŸ©º', tab: 'appointments' },
-									{ label: 'Order Medicines', icon: 'ðŸ’Š', tab: 'pharmacy' },
+									{ label: 'Book Appointment', icon: '📅', tab: 'doctors' },
+									{ label: 'Medical Records', icon: '📋', tab: 'records' },
+									{ label: 'My Consultations', icon: '🩺', tab: 'appointments' },
+									{ label: 'Order Medicines', icon: '💊', tab: 'pharmacy' },
 								].map(action => (
 									<button key={action.tab}
 										onClick={() => handleTabChange(action.tab)}
@@ -360,11 +364,12 @@ export default function PatientDashboard() {
 									<div>
 										<h3 className="font-semibold text-text-primary">{doc.name}</h3>
 										<p className="text-xs text-primary-600 font-medium">{doc.specialty}</p>
+									<div className="mt-1"><VerifiedBadge isVerified={doc.isVerified} size="sm" /></div>
 									</div>
 								</div>
 								<div className="flex items-center justify-between text-sm text-text-secondary mb-4">
 									<span>{doc.experience}</span>
-									<span>â­ {doc.rating?.toFixed(1)}</span>
+									<span>⭐ {doc.rating?.toFixed(1)}</span>
 								</div>
 								<button className="btn-primary w-full btn-sm"
 									onClick={() => openBookingModal(doc)}>
@@ -385,9 +390,9 @@ export default function PatientDashboard() {
 									</div>
 									<div className="flex-1">
 										<h2 className="text-lg font-bold text-text-primary">Book Appointment</h2>
-										<p className="text-sm text-text-secondary">{bookingDoctor.name} â€¢ {bookingDoctor.specialty} â€¢ â­ {bookingDoctor.rating?.toFixed(1)}</p>
+										<p className="text-sm text-text-secondary">{bookingDoctor.name} • {bookingDoctor.specialty} • ⭐ {bookingDoctor.rating?.toFixed(1)}</p>
 									</div>
-									<button onClick={() => setBookingDoctor(null)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-text-secondary transition-colors">âœ•</button>
+									<button onClick={() => setBookingDoctor(null)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-text-secondary transition-colors">✕</button>
 								</div>
 
 								<div className="px-6 py-5 space-y-5">
@@ -414,7 +419,7 @@ export default function PatientDashboard() {
 
 									{/* â”€â”€ Date â”€â”€ */}
 									<div>
-										<label className="block text-sm font-semibold text-text-primary mb-2">ðŸ“… Preferred Date</label>
+										<label className="block text-sm font-semibold text-text-primary mb-2">📝“… Preferred Date</label>
 										<input type="date" className="input w-full"
 											min={new Date(Date.now() + 86400000).toISOString().split('T')[0]}
 											value={bookingForm.date}
@@ -463,7 +468,7 @@ export default function PatientDashboard() {
 
 									{/* â”€â”€ Reason / Comments (Optional) â”€â”€ */}
 									<div>
-										<label className="block text-sm font-semibold text-text-primary mb-2">ðŸ“ Reason for Visit / Comments <span className="text-text-secondary font-normal">(optional)</span></label>
+										<label className="block text-sm font-semibold text-text-primary mb-2">📝“ Reason for Visit / Comments <span className="text-text-secondary font-normal">(optional)</span></label>
 										<textarea className="input w-full resize-none" rows={2}
 											placeholder="Describe your symptoms, any concerns, or additional notes..."
 											value={bookingForm.reason}
@@ -473,17 +478,17 @@ export default function PatientDashboard() {
 
 									{/* â”€â”€ Upload Medical Records (Optional) â”€â”€ */}
 									<div>
-										<label className="block text-sm font-semibold text-text-primary mb-2">ðŸ“Ž Upload Medical Records <span className="text-text-secondary font-normal">(optional)</span></label>
+										<label className="block text-sm font-semibold text-text-primary mb-2">📝“Ž Upload Medical Records <span className="text-text-secondary font-normal">(optional)</span></label>
 										{bookingForm.uploadedFile ? (
 											<div className="flex items-center gap-2 bg-success-50 border border-success-200 rounded-lg px-3 py-2">
-												<span className="text-success-600">âœ…</span>
+												<span className="text-success-600">✅</span>
 												<span className="text-sm text-success-700 font-medium flex-1 truncate">{bookingForm.uploadedFile.name}</span>
 												<button type="button" onClick={() => setBookingForm(f => ({ ...f, uploadedFile: null }))}
 													className="text-xs text-red-500 hover:text-red-700 font-medium">Remove</button>
 											</div>
 										) : (
 											<label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 hover:border-primary-300 rounded-lg px-4 py-3 cursor-pointer transition-colors group">
-												<span className="text-xl text-gray-300 group-hover:text-primary-400 transition-colors">ðŸ“„</span>
+												<span className="text-xl text-gray-300 group-hover:text-primary-400 transition-colors">📝“„</span>
 												<span className="text-sm text-text-secondary group-hover:text-primary-600">Click to upload reports, lab results, or prescriptions</span>
 												<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
 													onChange={e => {
@@ -498,7 +503,7 @@ export default function PatientDashboard() {
 									<div className="bg-gradient-to-r from-primary-50 to-blue-50 border border-primary-100 rounded-xl p-4">
 										<div className="flex items-center justify-between mb-1">
 											<span className="text-sm text-text-secondary">Consultation Fee</span>
-											<span className="text-xl font-bold text-primary-700">â‚¹{bookingDoctor.consultationFee || 2000}</span>
+											<span className="text-xl font-bold text-primary-700">₹{bookingDoctor.consultationFee || 2000}</span>
 										</div>
 										<p className="text-xs text-text-secondary">Payment to be collected at the clinic or via online transfer</p>
 									</div>
@@ -511,7 +516,7 @@ export default function PatientDashboard() {
 											{bookingLoading ? (
 												<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Booking...</>
 											) : (
-												'âœ… Confirm Booking'
+												'✅ Confirm Booking'
 											)}
 										</button>
 									</div>
@@ -575,7 +580,7 @@ export default function PatientDashboard() {
 				<div className="space-y-6 animate-fade-in">
 					<div className="section-header">
 						<h1 className="text-2xl font-bold">Medical Records</h1>
-						<button className="btn-primary btn-sm" onClick={() => setUploadModal(true)}>ðŸ“¤ Upload Record</button>
+						<button className="btn-primary btn-sm" onClick={() => setUploadModal(true)}>📝“¤ Upload Record</button>
 					</div>
 
 					{/* Records Table */}
@@ -586,7 +591,7 @@ export default function PatientDashboard() {
 							</div>
 						) : medicalRecords.length === 0 ? (
 							<div className="text-center py-12 text-text-secondary text-sm">
-								<span className="text-4xl block mb-3">ðŸ“‹</span>
+								<span className="text-4xl block mb-3">📝“‹</span>
 								No records uploaded yet.
 								<button onClick={() => setUploadModal(true)} className="block mx-auto mt-3 btn-primary btn-sm">Upload your first record</button>
 							</div>
@@ -616,8 +621,8 @@ export default function PatientDashboard() {
 						<div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setUploadModal(false)}>
 							<div className="bg-white rounded-2xl shadow-clinical-lg w-full max-w-md p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
 								<div className="flex items-center justify-between mb-5">
-									<h2 className="text-lg font-bold text-text-primary">ðŸ“¤ Upload Medical Record</h2>
-									<button onClick={() => setUploadModal(false)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-text-secondary">âœ•</button>
+									<h2 className="text-lg font-bold text-text-primary">📝“¤ Upload Medical Record</h2>
+									<button onClick={() => setUploadModal(false)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-text-secondary">✕</button>
 								</div>
 
 								<div className="space-y-4">
@@ -645,16 +650,16 @@ export default function PatientDashboard() {
 										<label className="block text-sm font-semibold text-text-primary mb-1.5">File <span className="text-danger-500">*</span></label>
 										{uploadForm.file ? (
 											<div className="flex items-center gap-2 bg-success-50 border border-success-200 rounded-lg px-3 py-2">
-												<span className="text-success-600">âœ…</span>
+												<span className="text-success-600">✅</span>
 												<span className="text-sm text-success-700 flex-1 truncate">{uploadForm.file.name}</span>
 												<button type="button" onClick={() => setUploadForm(f => ({ ...f, file: null }))}
 													className="text-xs text-danger-500 hover:text-danger-700">Remove</button>
 											</div>
 										) : (
 											<label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-200 hover:border-primary-300 rounded-xl p-6 cursor-pointer transition-colors group">
-												<span className="text-3xl text-gray-300 group-hover:text-primary-400 transition-colors">ðŸ“„</span>
+												<span className="text-3xl text-gray-300 group-hover:text-primary-400 transition-colors">📝“„</span>
 												<span className="text-sm text-text-secondary group-hover:text-primary-600">Click to browse</span>
-												<span className="text-xs text-text-secondary">PDF, JPG, PNG â€” max 5MB</span>
+												<span className="text-xs text-text-secondary">PDF, JPG, PNG –” max 5MB</span>
 												<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"
 													onChange={e => { if (e.target.files[0]) setUploadForm(f => ({ ...f, file: e.target.files[0] })); }} />
 											</label>
@@ -669,7 +674,7 @@ export default function PatientDashboard() {
 											className="btn-primary flex-1 flex items-center justify-center gap-2">
 											{uploading ? (
 												<><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Uploading...</>
-											) : 'âœ… Upload'}
+											) : '✅ Upload'}
 										</button>
 									</div>
 								</div>
@@ -685,8 +690,8 @@ export default function PatientDashboard() {
 					<h1 className="text-2xl font-bold">Billing & Payments</h1>
 					<div className="grid sm:grid-cols-3 gap-4">
 						{[
-							{ label: 'Pending', value: `â‚¹${bills.filter(b=>b.status==='pending').reduce((s,b)=>s+b.amount,0)}`, color: 'text-amber-600' },
-							{ label: 'Total Paid', value: 'â‚¹12,000', color: 'text-success-600' },
+							{ label: 'Pending', value: `₹${bills.filter(b=>b.status==='pending').reduce((s,b)=>s+b.amount,0)}`, color: 'text-amber-600' },
+							{ label: 'Total Paid', value: '₹12,000', color: 'text-success-600' },
 							{ label: 'Total Bills', value: bills.length, color: 'text-primary-600' },
 						].map((s,i) => (
 							<div key={i} className="card text-center">
@@ -705,7 +710,7 @@ export default function PatientDashboard() {
 								</div>
 								<div className="flex items-center gap-3">
 									<span className={`text-sm font-bold ${bill.status === 'paid' ? 'text-success-600' : 'text-amber-600'}`}>
-										â‚¹{bill.amount}
+										₹{bill.amount}
 									</span>
 									<span className={`badge ${bill.status === 'paid' ? 'badge-success' : 'badge-amber'}`}>
 										{bill.status.toUpperCase()}
@@ -721,7 +726,7 @@ export default function PatientDashboard() {
 			{/* â”€â”€ PHARMACY TAB â”€â”€ */}
 			{activeTab === 'pharmacy' && (
 				<div className="space-y-6 animate-fade-in">
-					<PharmacyModule />
+					<PharmacyStore />
 				</div>
 			)}
 

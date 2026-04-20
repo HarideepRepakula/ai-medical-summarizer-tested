@@ -73,11 +73,21 @@ class ApiService {
 	async getActiveSessions() { return this.request('/auth/sessions'); }
 
 	// ── Doctors ───────────────────────────────────────────────────────────────
-	async getDoctors(specialty = '') {
-		const q = specialty ? `?specialty=${encodeURIComponent(specialty)}` : '';
-		return this.request(`/doctors${q}`);
+	async getDoctors(specialty = '', search = '') {
+		const params = new URLSearchParams();
+		if (specialty) params.set('specialty', specialty);
+		if (search)    params.set('search', search);
+		const q = params.toString();
+		return this.request(`/doctors${q ? `?${q}` : ''}`);
 	}
 	async getDoctorById(id) { return this.request(`/doctors/${id}`); }
+	async getEscalatedQueries() { return this.request('/doctors/escalated-queries'); }
+	async respondToEscalatedQuery(queryId, response) {
+		return this.request(`/doctors/escalated-queries/${queryId}/respond`, {
+			method: 'POST',
+			body:   JSON.stringify({ response })
+		});
+	}
 
 	// ── Appointments ──────────────────────────────────────────────────────────
 	async getAppointments(params = {}) {
@@ -175,6 +185,10 @@ class ApiService {
 	async getHealthInsights() { return this.request('/ai/health-insights'); }
 
 	// ── Pharmacy ──────────────────────────────────────────────────────────────
+	async getPharmacyProducts(category="") {
+		const q = category && category !== "All" ? `?category=${encodeURIComponent(category)}` : "";
+		return this.request(`/pharmacy/products${q}`);
+	}
 	async getPharmacyOrders() { return this.request('/pharmacy/orders'); }
 	async createAutoCart(prescriptionId) {
 		return this.request('/pharmacy/auto-cart', { method: 'POST', body: JSON.stringify({ prescriptionId }) });
@@ -208,10 +222,10 @@ class ApiService {
 	async askChatbot(message) {
 		return this.request('/chatbot/ask', { method: 'POST', body: JSON.stringify({ message }) });
 	}
-	async escalateToDoctor(appointmentId = null, question = '') {
+	async escalateToDoctor(appointmentId = null, question = '', aiAnswer = '') {
 		return this.request('/chatbot/escalate', {
 			method: 'POST',
-			body:   JSON.stringify({ appointmentId, question })
+			body:   JSON.stringify({ appointmentId, question, aiAnswer })
 		});
 	}
 	async askConsultationChatbot(appointmentId, message) {

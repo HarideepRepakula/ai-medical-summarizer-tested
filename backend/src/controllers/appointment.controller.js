@@ -13,9 +13,10 @@ import {
 
 /** Build a JS Date from an appointment date + time string (HH:MM) */
 function buildAppointmentDateTime(dateObj, timeStr) {
+	const dt = new Date(dateObj); // comes from DB as UTC
 	const [h, m] = timeStr.split(":").map(Number);
-	const dt = new Date(dateObj);
-	dt.setHours(h, m, 0, 0);
+	// Use setUTCHours to stay consistent with MongoDB UTC storage
+	dt.setUTCHours(h, m, 0, 0);
 	return dt;
 }
 
@@ -27,8 +28,9 @@ function minutesUntil(appointmentDate, startTime) {
 
 /** Returns hours until an appointment from now (can be negative if past) */
 function hoursUntil(dateObj, timeStr) {
-	const dt = buildAppointmentDateTime(dateObj, timeStr);
-	return (dt.getTime() - Date.now()) / 3_600_000;
+	const aptDt = buildAppointmentDateTime(dateObj, timeStr);
+	const now = new Date();
+	return (aptDt.getTime() - now.getTime()) / 3600000;
 }
 
 
@@ -318,6 +320,164 @@ export async function getAppointmentLockState(req, res) {
 	} catch (error) {
 		console.error('Get lock state error:', error);
 		res.status(500).json({ success: false, error: 'Failed to get lock state' });
+	}
+}
+
+// ─── Get Consultation Data (Unified Run-Once Endpoint) ───────────────────────
+
+/**
+ * GET /api/appointments/:id/consultation-data
+ * Single endpoint used by BOTH Patient and Doctor dashboards.
+ * - Runs AI summary ONCE, caches it in DB, never regenerates.
+ * - Returns T-15/T-10 lock states.
+ * - Doctor sees summary only at T-10; patient always sees it.
+ */
+export async function getConsultationData(req, res) {
+	try {
+		const { id }   = req.params;
+		const userId   = req.user.userId;
+		const userRole = req.user.role;
+
+		const appointment = await AppointmentModel.findById(id)
+			.populate('patientId', 'name email phone')
+			.populate('doctorId',  'name email phone');
+
+		if (!appointment) {
+			return res.status(404).json({ success: false, error: 'Appointment not found' });
+		}
+
+		// Auth: must be patient or doctor of this appointment
+		const isPatient = appointment.patientId._id.toString() === userId;
+		const isDoctor  = appointment.doctorId._id.toString()  === userId;
+		if (!isPatient && !isDoctor) {
+			return res.status(403).json({ success: false, error: 'Unauthorized' });
+		}
+
+		// ── Timing locks ───────────────────────────────────────────────────────────────────
+		const mins             = minutesUntil(appointment.appointmentDate, appointment.startTime);
+		const isMeetingEnabled = mins <= 15;
+		const isUploadLocked   = mins <= 15;
+		const isSummaryLocked  = mins <= 10;
+		// Doctor only sees summary at T-10; patient always sees it
+		const showSummaryToDoctor = isDoctor ? mins <= 10 : true;
+
+		// ── Run AI summary ONCE ───────────────────────────────────────────────────────────────────
+		if (!appointment.aiPreparedSummary?.content) {
+			try {
+				const { generatePatientBriefingSummary } = await import('../services/ollamaService.js');
+				const { PrescriptionModel } = await import('../models/Prescription.js');
+				const { LabResultModel }    = await import('../models/LabResult.js');
+				const { TranscriptModel }   = await import('../models/Transcript.js');
+
+				const patientId = appointment.patientId._id;
+				const [prescriptions, labResults, transcripts] = await Promise.all([
+					PrescriptionModel.find({ patientId }).sort({ createdAt: -1 }).limit(5).lean(),
+					LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(5).lean(),
+					TranscriptModel.find({ patientId }).sort({ createdAt: -1 }).limit(3).lean()
+				]);
+
+				const summary = await generatePatientBriefingSummary({
+					patientName: appointment.patientId.name,
+					reason:      appointment.reason,
+					prescriptions,
+					labResults,
+					transcripts
+				});
+
+				// Save once — never regenerate
+				appointment.aiPreparedSummary = {
+					content:        summary.patientOverview || summary.summary || '',
+					editablePoints: summary.discussionPoints || [],
+					generatedAt:    new Date(),
+					isLocked:       false,
+					sharedWithDoctor: false
+				};
+				await appointment.save();
+				console.log(`[AI] Summary generated once for appointment ${id}`);
+			} catch (aiErr) {
+				console.error('[AI] Summary generation failed:', aiErr.message);
+				// Don't block the response — return without summary
+			}
+		}
+
+		res.json({
+			success: true,
+			data: {
+				appointment: {
+					id:              appointment._id,
+					patient:         { id: appointment.patientId._id, name: appointment.patientId.name, email: appointment.patientId.email },
+					doctor:          { id: appointment.doctorId._id,  name: appointment.doctorId.name,  email: appointment.doctorId.email },
+					date:            appointment.appointmentDate,
+					startTime:       appointment.startTime,
+					endTime:         appointment.endTime,
+					reason:          appointment.reason,
+					status:          appointment.status,
+					linkedRecords:   appointment.linkedRecords || [],
+					consultationRecords: appointment.consultationRecords || {},
+					aiPreparedSummary:   appointment.aiPreparedSummary || null
+				},
+				isMeetingEnabled,
+				isUploadLocked,
+				isSummaryLocked,
+				showSummaryToDoctor,
+				minutesRemaining: Math.round(mins)
+			}
+		});
+
+	} catch (error) {
+		console.error('Get consultation data error:', error);
+		res.status(500).json({ success: false, error: 'Failed to fetch consultation data' });
+	}
+}
+
+// ─── Get Consultation State (Comprehensive Lock State) ──────────────────────
+
+/**
+ * GET /api/appointments/:id/consultation-state
+ * Returns comprehensive consultation state with all lock timings.
+ * Used by frontend to control UI elements (T-15 upload lock, T-10 summary lock, meeting enable).
+ */
+export async function getConsultationState(req, res) {
+	try {
+		const { id } = req.params;
+		const userId = req.user.userId;
+
+		const appointment = await AppointmentModel.findById(id).lean();
+		if (!appointment) {
+			return res.status(404).json({ success: false, error: 'Appointment not found' });
+		}
+
+		// Auth: must be the patient or the doctor
+		if (
+			appointment.patientId.toString() !== userId &&
+			appointment.doctorId.toString()  !== userId
+		) {
+			return res.status(403).json({ success: false, error: 'Unauthorized' });
+		}
+
+		const mins = minutesUntil(appointment.appointmentDate, appointment.startTime);
+
+		res.json({
+			success: true,
+			data: {
+				appointmentId:           id,
+				minutesRemaining:        Math.round(mins),
+				isMeetingEnabled:        mins <= 15,          // Meeting room opens 15 min before
+				isUploadLocked:          mins <= 15,          // File uploads lock 15 min before
+				isSummaryLocked:         mins <= 10,          // Patient summary edit locks 10 min before
+				isSummaryVisibleToDoctor: mins <= 10,         // Doctor can view summary 10 min before
+				threeHourLock:           mins < 180,          // Cancel/reschedule lock (3 hours)
+				lockMessages: {
+					upload:  mins <= 15 ? 'File uploads are locked 15 minutes before consultation.' : null,
+					summary: mins <= 10 ? 'Summary is locked and shared with your doctor.' : null,
+					meeting: mins <= 15 ? 'Meeting room is now open. You can join anytime.' : `Meeting opens in ${Math.round(mins - 15)} minutes.`
+				}
+			}
+		});
+
+	} catch (error) {
+		console.error('Get consultation state error:', error);
+		res.status(500).json({ success: false, error: 'Failed to get consultation state' });
 	}
 }
 

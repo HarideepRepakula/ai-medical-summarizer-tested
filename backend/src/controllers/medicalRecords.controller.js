@@ -7,9 +7,36 @@
 
 import fs from "fs/promises";
 import path from "path";
+import Tesseract from "tesseract.js";
 import { MedicalRecordModel } from "../models/MedicalRecord.js";
+import { LabResultModel } from "../models/LabResult.js";
+import { parseLabReportOcr } from "../services/ollamaService.js";
 
 const UPLOADS_BASE_URL = process.env.UPLOADS_BASE_URL || "http://localhost:4000/uploads";
+
+// ─── OCR Helper ───────────────────────────────────────────────────────────────
+
+async function processLaboratoryReport(filePath, patientId, recordId) {
+	try {
+		const { data: { text } } = await Tesseract.recognize(filePath, 'eng');
+		if (!text?.trim() || text.trim().length < 20) return;
+
+		const structured = await parseLabReportOcr(text);
+
+		await LabResultModel.create({
+			patientId,
+			medicalRecordId: recordId,
+			labName:         structured.labName || null,
+			recordDate:      structured.recordDate ? new Date(structured.recordDate) : new Date(),
+			doctorOrdered:   structured.doctorOrdered || null,
+			structuredData:  structured.tests || [],
+			rawText:         text,
+		});
+		console.log(`[OCR] Successfully processed lab report for record: ${recordId} — ${structured.tests?.length || 0} tests found`);
+	} catch (err) {
+		console.error("[OCR/AI Error]", err.message);
+	}
+}
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
@@ -20,7 +47,6 @@ export async function uploadMedicalRecord(req, res) {
 
 	const { recordName, type } = req.body;
 	if (!recordName?.trim()) {
-		// Cleanup orphaned file
 		try { await fs.unlink(req.file.path); } catch {}
 		return res.status(400).json({ success: false, error: "Record name is required." });
 	}
@@ -41,9 +67,16 @@ export async function uploadMedicalRecord(req, res) {
 			fileSize:   req.file.size,
 		});
 
+		// Fire-and-forget OCR for Lab Reports — user gets instant response
+		if (fileType === "Lab Report") {
+			processLaboratoryReport(req.file.path, req.user.userId, record._id);
+		}
+
 		res.status(201).json({
 			success: true,
-			message: "Record uploaded successfully.",
+			message: fileType === "Lab Report"
+				? "Lab report uploaded. OCR processing in background."
+				: "Record uploaded successfully.",
 			data: {
 				id:         record._id,
 				recordName: record.recordName,

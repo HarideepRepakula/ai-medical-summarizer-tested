@@ -1,6 +1,5 @@
 import express from "express";
 import {
-	getPreConsultSummary,
 	saveTranscript,
 	cdssCheck,
 	getHealthInsights
@@ -8,9 +7,6 @@ import {
 import { requireRole } from "../middleware/rbac.js";
 
 const router = express.Router();
-
-// GET /api/ai/pre-consult-summary/:appointmentId — Doctor only
-router.get("/pre-consult-summary/:appointmentId", requireRole(["DOCTOR"]), getPreConsultSummary);
 
 // POST /api/ai/save-transcript — Doctor/Patient
 router.post("/save-transcript", saveTranscript);

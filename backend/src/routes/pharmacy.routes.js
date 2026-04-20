@@ -1,5 +1,6 @@
 import express from "express";
 import {
+	getProducts,
 	createAutoCart,
 	deselectMedicine,
 	confirmOrder,
@@ -9,6 +10,9 @@ import {
 import { requireRole } from "../middleware/rbac.js";
 
 const router = express.Router();
+
+// GET /api/pharmacy/products — All authenticated users
+router.get("/products", getProducts);
 
 // POST /api/pharmacy/auto-cart — Doctor only
 router.post("/auto-cart", requireRole(["DOCTOR", "ADMIN"]), createAutoCart);

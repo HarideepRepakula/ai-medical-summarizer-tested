@@ -22,7 +22,7 @@ function RichAiSummary({ data, summaryError, loadingSummary }) {
 			))}
 			<p className="text-xs text-ai-500 flex items-center gap-1.5 mt-3">
 				<span className="w-3 h-3 border-2 border-ai-300 border-t-ai-600 rounded-full animate-spin inline-block" />
-				Generating AI summary... (this may take 5–10 seconds)
+				Generating AI summary… (Ollama may take 15–40s on first load)
 			</p>
 		</div>
 	);
@@ -154,27 +154,52 @@ export default function ConsultationPrep({ appointment, onBack }) {
 	async function loadAiSummary() {
 		setLoadingSummary(true);
 		setSummaryError('');
-		try {
-			const res = await apiService.getAiSummary(appointment.id);
-			if (res.success) {
-				setAiSummary(res.data);
-				setEditablePoints(
-					res.data?.discussionPoints ||
-					res.data?.editablePoints   ||
-					res.data?.keyFindings      ||
-					[]
-				);
+
+		// Retry up to 2 times with 5s delay — Ollama can be slow on first load
+		const MAX_RETRIES = 2;
+		let lastError = null;
+
+		for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+			try {
+				// Race the API call against a 90s timeout
+				const res = await Promise.race([
+					apiService.getAiSummary(appointment.id),
+					new Promise((_, reject) =>
+						setTimeout(() => reject(new Error('AI summary timed out. Ollama may be slow — try again.')), 90000)
+					)
+				]);
+				if (res.success) {
+					setAiSummary(res.data);
+					setEditablePoints(
+						res.data?.discussionPoints ||
+						res.data?.editablePoints   ||
+						res.data?.keyFindings      ||
+						[]
+					);
+					setLoadingSummary(false);
+					return; // success — exit
+				}
+			} catch (err) {
+				lastError = err;
+				if (attempt < MAX_RETRIES) {
+					setSummaryError(`Attempt ${attempt + 1} failed. Retrying...`);
+					await new Promise(r => setTimeout(r, 5000)); // wait 5s before retry
+				}
 			}
-		} catch {
-			setSummaryError('Could not load AI summary. It will be generated shortly.');
-			setEditablePoints([
-				'Review recent medication changes',
-				'Discuss any new symptoms',
-				'Follow up on previous lab results'
-			]);
-		} finally {
-			setLoadingSummary(false);
 		}
+
+		// All retries exhausted
+		setSummaryError(
+			lastError?.message?.includes('timed out')
+				? 'AI summary timed out. Ollama may still be loading the model. Try refreshing in 30 seconds.'
+				: 'Could not load AI summary. Using default discussion points.'
+		);
+		setEditablePoints([
+			'Review recent medication changes',
+			'Discuss any new symptoms',
+			'Follow up on previous lab results'
+		]);
+		setLoadingSummary(false);
 	}
 
 	// ── Summary Editing ──────────────────────────────────────────────────────
