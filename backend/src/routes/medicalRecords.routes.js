@@ -1,42 +1,34 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
-import { uploadMedicalRecord, getMedicalRecords, deleteMedicalRecord } from "../controllers/medicalRecords.controller.js";
+import { uploadMedicalRecord, getMedicalRecords, deleteMedicalRecord, getPatientMedicalRecords } from "../controllers/medicalRecords.controller.js";
+import { requireRole } from "../middleware/rbac.js";
 
 const router = express.Router();
 
-// Store files persistently in /uploads with unique filenames
 const storage = multer.diskStorage({
-	destination: (_req, _file, cb) => {
-		cb(null, path.join(process.cwd(), "uploads"));
-	},
+	destination: (_req, _file, cb) => cb(null, path.join(process.cwd(), "uploads")),
 	filename: (_req, file, cb) => {
-		const ext    = path.extname(file.originalname);
-		const unique = `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`;
-		cb(null, unique);
+		const ext = path.extname(file.originalname);
+		cb(null, `${Date.now()}-${Math.round(Math.random() * 1e6)}${ext}`);
 	},
 });
 
 const upload = multer({
 	storage,
-	limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+	limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
 	fileFilter: (_req, file, cb) => {
 		const allowed = ["image/jpeg", "image/png", "image/gif", "application/pdf"];
-		if (allowed.includes(file.mimetype)) {
-			cb(null, true);
-		} else {
-			cb(new Error("Only JPG, PNG, and PDF files are accepted."));
-		}
+		cb(null, allowed.includes(file.mimetype));
 	},
 });
 
-// POST /api/medical-records/upload
-router.post("/upload", upload.single("file"), uploadMedicalRecord);
+// Patient routes
+router.post("/upload",    upload.single("file"), uploadMedicalRecord);
+router.get("/",           getMedicalRecords);
+router.delete("/:id",     deleteMedicalRecord);
 
-// GET /api/medical-records
-router.get("/", getMedicalRecords);
-
-// DELETE /api/medical-records/:id
-router.delete("/:id", deleteMedicalRecord);
+// Doctor route — view any patient's records
+router.get("/patient/:patientId", requireRole(["DOCTOR"]), getPatientMedicalRecords);
 
 export default router;

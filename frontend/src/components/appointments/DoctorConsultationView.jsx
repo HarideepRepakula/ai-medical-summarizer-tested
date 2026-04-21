@@ -212,6 +212,7 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 	const [loadingSummary, setLoadingSummary] = useState(true);
 	const [summaryError, setSummaryError]   = useState('');
 	const [uploadedFiles, setUploadedFiles] = useState(appointment?.linkedRecords || []);
+	const [patientMedRecords, setPatientMedRecords] = useState([]);
 	const [meetingActive, setMeetingActive] = useState(false);
 	const [isRecording, setIsRecording]     = useState(false);
 	// AI Scribe state
@@ -239,7 +240,16 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 		return () => clearInterval(interval);
 	}, []);
 
-	useEffect(() => { loadAiSummary(); }, [appointment?.id]);
+	useEffect(() => { loadAiSummary(); loadPatientRecords(); }, [appointment?.id]);
+
+	async function loadPatientRecords() {
+		try {
+			const patId = typeof appointment.patient === 'object' ? appointment.patient.id : null;
+			if (!patId) return;
+			const res = await apiService.getPatientMedicalRecords(patId);
+			if (res.success) setPatientMedRecords(res.data?.records || []);
+		} catch(e) { console.warn('Patient records:', e.message); }
+	}
 
 	async function loadAiSummary() {
 		setLoadingSummary(true);
@@ -546,11 +556,11 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 							</div>
 						) : (
 							<div className="flex flex-col">
-								<div className="bg-gray-900 rounded-clinical overflow-hidden relative mb-4" style={{ minHeight: 360 }}>
+								<div className="rounded-xl overflow-hidden border-2 border-primary-500 shadow-2xl bg-gray-900 mb-4" style={{ height: 420 }}>
 									<iframe
-										src={`https://meet.jit.si/ClinIQ-${appointment.id}#config.startWithAudioMuted=false&config.startWithVideoMuted=false&config.prejoinPageEnabled=false`}
-										style={{ width: '100%', height: '100%', border: 'none', minHeight: 360 }}
-										allow="camera;microphone;display-capture"
+										src={`https://meet.jit.si/${appointment.id}#config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.startWithVideoMuted=false&config.disableModeratorIndicator=true&config.enableWelcomePage=false&config.enableClosePage=false&userInfo.displayName=Doctor`}
+										style={{ width: '100%', height: '100%', border: 'none', minHeight: 420 }}
+										allow="camera; microphone; display-capture; autoplay"
 										title="ClinIQ Video Consultation"
 									/>
 								</div>

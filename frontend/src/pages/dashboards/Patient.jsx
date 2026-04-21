@@ -172,12 +172,11 @@ export default function PatientDashboard() {
 	];
 
 	function openBookingModal(doc) {
-		const tomorrow = new Date();
-		tomorrow.setDate(tomorrow.getDate() + 1);
+		const today = new Date().toISOString().split('T')[0];
 		setBookingDoctor(doc);
 		setBookingStep('form');
 		setBookingForm({
-			date: tomorrow.toISOString().split('T')[0],
+			date: today,
 			startTime: '10:00',
 			endTime: '10:30',
 			visitType: visitTypeFilter !== 'all' ? visitTypeFilter : 'regular',
@@ -229,20 +228,28 @@ export default function PatientDashboard() {
 		}
 	}
 
-	const TIME_SLOTS = [
-		{ start: '09:00', end: '09:30', label: '9:00 AM' },
-		{ start: '09:30', end: '10:00', label: '9:30 AM' },
-		{ start: '10:00', end: '10:30', label: '10:00 AM' },
-		{ start: '10:30', end: '11:00', label: '10:30 AM' },
-		{ start: '11:00', end: '11:30', label: '11:00 AM' },
-		{ start: '11:30', end: '12:00', label: '11:30 AM' },
-		{ start: '14:00', end: '14:30', label: '2:00 PM' },
-		{ start: '14:30', end: '15:00', label: '2:30 PM' },
-		{ start: '15:00', end: '15:30', label: '3:00 PM' },
-		{ start: '15:30', end: '16:00', label: '3:30 PM' },
-		{ start: '16:00', end: '16:30', label: '4:00 PM' },
-		{ start: '16:30', end: '17:00', label: '4:30 PM' },
-	];
+	const TODAY = new Date().toISOString().split('T')[0];
+
+	const TIME_SLOTS = (() => {
+		const slots = [];
+		for (let h = 9; h < 17; h++) {
+			for (const m of [0, 30]) {
+				const start = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+				const endM = m + 30;
+				const end = `${String(h + Math.floor(endM/60)).padStart(2,'0')}:${String(endM%60).padStart(2,'0')}`;
+				const period = h >= 12 ? 'PM' : 'AM';
+				const dh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+				slots.push({ start, end, label: `${dh}:${String(m).padStart(2,'0')} ${period}` });
+			}
+		}
+		return slots;
+	})();
+
+	const availableSlots = TIME_SLOTS.filter(slot => {
+		if (bookingForm.date !== TODAY) return true;
+		const [h, m] = slot.start.split(':').map(Number);
+		return new Date().setHours(h, m, 0, 0) > Date.now();
+	});
 
 	if (loading) return (
 		<div className="min-h-screen flex items-center justify-center bg-background">
@@ -421,7 +428,7 @@ export default function PatientDashboard() {
 									<div>
 										<label className="block text-sm font-semibold text-text-primary mb-2">📝“… Preferred Date</label>
 										<input type="date" className="input w-full"
-											min={new Date(Date.now() + 86400000).toISOString().split('T')[0]}
+											min={TODAY}
 											value={bookingForm.date}
 											onChange={e => setBookingForm(f => ({ ...f, date: e.target.value }))}
 										/>
@@ -434,7 +441,7 @@ export default function PatientDashboard() {
 											<span className="text-xs text-text-secondary font-medium">Morning</span>
 										</div>
 										<div className="grid grid-cols-4 gap-1.5 mb-3">
-											{TIME_SLOTS.filter(s => parseInt(s.start) < 12).map(slot => (
+											{availableSlots.filter(s => parseInt(s.start) < 12).map(slot => (
 												<button key={slot.start} type="button"
 													className={`py-2 px-1 rounded-lg text-xs font-medium border transition-all ${
 														bookingForm.startTime === slot.start
@@ -451,7 +458,7 @@ export default function PatientDashboard() {
 											<span className="text-xs text-text-secondary font-medium">Afternoon</span>
 										</div>
 										<div className="grid grid-cols-4 gap-1.5">
-											{TIME_SLOTS.filter(s => parseInt(s.start) >= 12).map(slot => (
+											{availableSlots.filter(s => parseInt(s.start) >= 12).map(slot => (
 												<button key={slot.start} type="button"
 													className={`py-2 px-1 rounded-lg text-xs font-medium border transition-all ${
 														bookingForm.startTime === slot.start
@@ -597,14 +604,21 @@ export default function PatientDashboard() {
 							</div>
 						) : (
 							<table className="table-clinical">
-								<thead><tr><th>Name</th><th>Type</th><th>File</th><th>Uploaded</th><th>Actions</th></tr></thead>
+								<thead><tr><th>Name</th><th>Type</th><th>Uploaded</th><th>AI Summary</th><th>Actions</th></tr></thead>
 								<tbody>
 									{medicalRecords.map(rec => (
 										<tr key={rec.id}>
 											<td className="font-medium">{rec.recordName}</td>
 											<td><span className="badge badge-gray text-xs">{rec.fileType}</span></td>
-											<td className="text-xs text-text-secondary truncate max-w-[160px]">{rec.fileName}</td>
-											<td className="text-xs text-text-secondary">{new Date(rec.uploadedAt).toLocaleDateString()}</td>
+																						<td className="text-xs text-text-secondary">{new Date(rec.uploadedAt).toLocaleDateString()}</td>
+											<td className="max-w-[200px] text-xs text-text-secondary">
+												{rec.aiSummary ? (
+													<div>
+														{/urgent|FLAG/i.test(rec.aiSummary) && <span className="badge-danger text-[10px] block mb-1">⚠️ See Doctor</span>}
+														<p className="line-clamp-3">{rec.aiSummary.substring(0,160)}{rec.aiSummary.length>160?"...":""}</p>
+													</div>
+												) : <span className="italic text-[10px]">Generating...</span>}
+											</td>
 											<td className="space-x-2">
 												<a href={rec.fileUrl} target="_blank" rel="noreferrer" className="btn-ghost btn-sm text-xs">View</a>
 												<button onClick={() => handleDeleteRecord(rec.id)} className="btn-ghost btn-sm text-xs text-danger-500">Delete</button>

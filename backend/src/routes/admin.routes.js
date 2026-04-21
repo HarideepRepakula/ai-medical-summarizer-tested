@@ -5,6 +5,7 @@ import {
 	getAiSystemReport,
 	getPendingVerifications,
 	reVerifyDoctor,
+	manualApproveDoctor,
 	getLockedAccounts,
 	unlockAccount,
 	moderateRecord
@@ -35,6 +36,7 @@ router.get("/audit-report",              getAiSystemReport);
 // Doctor verification
 router.get("/pending-verifications",     getPendingVerifications);
 router.post("/verify-doctor/:doctorId",  upload.single("file"), reVerifyDoctor);
+router.patch("/approve-doctor/:doctorId", manualApproveDoctor);
 
 // Security / fraud detection
 router.get("/security/locked-accounts",  getLockedAccounts);

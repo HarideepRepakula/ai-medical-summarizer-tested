@@ -54,6 +54,44 @@ function safeJson(text, fallback) {
 // ── Exported functions (same signatures as before) ────────────────────────────
 
 /**
+ * Generate a natural-remedies-focused medical record summary.
+ * Runs in background after upload — result cached in MedicalRecord.aiSummary.
+ */
+export async function generateMedicalRecordSummary(ocrText, fileName) {
+	const prompt = `You are a holistic health assistant analyzing a medical document.
+Document: "${fileName}"
+Content: ${ocrText.substring(0, 3000)}
+
+Provide a structured analysis in JSON only (no markdown):
+{
+  "summary": "2-3 sentence plain-language summary of what this document shows",
+  "keyFindings": ["finding 1", "finding 2"],
+  "naturalRemedies": [
+    "Specific dietary change or natural remedy (e.g., increase leafy greens for low iron)",
+    "Lifestyle recommendation (e.g., 30-min daily walk for elevated glucose)",
+    "Herbal or nutritional suggestion (e.g., turmeric tea for inflammation markers)"
+  ],
+  "severityFlag": "none|mild|moderate|urgent",
+  "flagReason": "If urgent or moderate, explain why doctor consultation is needed. Otherwise empty string."
+}
+
+STRICT RULES:
+1. Do NOT recommend any pharmaceutical drugs, medications, or chemical compounds.
+2. Only suggest natural remedies: diet, herbs, lifestyle, sleep, hydration, exercise.
+3. If any value is critically abnormal, set severityFlag to "urgent" and flagReason to explain.
+4. Keep naturalRemedies practical and specific to the findings.`;
+
+	const text = await generate(prompt);
+	return safeJson(text, {
+		summary: 'Summary generation in progress.',
+		keyFindings: [],
+		naturalRemedies: ['Stay hydrated', 'Maintain a balanced diet', 'Get regular exercise'],
+		severityFlag: 'none',
+		flagReason: ''
+	});
+}
+
+/**
  * Parse raw OCR text from a lab report into structured JSON.
  */
 export async function parseLabReportOcr(rawText) {
@@ -146,13 +184,25 @@ A doctor is about to prescribe: "${medicationName}"
 Patient's current medications: ${meds}
 Patient's recent lab values: ${labContext}
 
+Classification rules:
+- "contraindicated" = absolute contraindications exist (patient MUST NOT take this drug)
+- "warning" = serious drug interactions or warnings exist but no absolute contraindications
+- "caution" = minor interactions or general precautions only
+- "safe" = no significant risks found for standard use
+
+Formatting rules:
+- Do NOT include FDA section numbers like "(4)", "(6)", "[See Section X]"
+- Do NOT say "See Table 1" or "Table 2" — instead summarize what those tables contain
+- Keep each item to 1-2 clear sentences maximum
+- Strip parenthetical cross-references like "(e.g., anaphylaxis) [See Adverse Reactions (6)]"
+
 Return ONLY valid JSON:
 {
   "riskLevel": "safe|caution|warning|contraindicated",
-  "interactions": ["interaction1"],
-  "contraindications": ["contraindication1"],
+  "interactions": ["clean interaction summary without table references"],
+  "contraindications": ["clean contraindication without section numbers"],
   "labConcerns": ["concern based on lab values"],
-  "recommendation": "brief clinical recommendation",
+  "recommendation": "one sentence actionable advice for the doctor",
   "requiresAttention": true
 }`;
 

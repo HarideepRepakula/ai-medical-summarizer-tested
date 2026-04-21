@@ -3,6 +3,7 @@
  * Pre-consultation summary, AI Scribe (transcript save), CDSS check.
  */
 
+import mongoose from "mongoose";
 import { AppointmentModel }  from "../models/Appointment.js";
 import { PrescriptionModel } from "../models/Prescription.js";
 import { LabResultModel }    from "../models/LabResult.js";
@@ -178,19 +179,38 @@ export async function cdssCheck(req, res) {
 		}
 
 		// ── Step 2: Patient context ───────────────────────────────────────────
-		const [labResults, prescriptions] = await Promise.all([
-			LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(3).lean(),
-			PrescriptionModel.find({ patientId, status: "active" }).limit(1).lean()
-		]);
+		const isValidId = mongoose.Types.ObjectId.isValid(patientId) && patientId.length === 24;
+		const [labResults, prescriptions] = isValidId
+			? await Promise.all([
+				LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(3).lean(),
+				PrescriptionModel.find({ patientId, status: "active" }).limit(1).lean()
+			])
+			: [[], []];
 
 		const existingMedications = prescriptions.flatMap(p => p.medicines.map(m => `${m.name} ${m.dosage}`));
 
-		// ── Step 3: Ollama clinical reasoning ───────────────────────────────
-		const cdssResult = await runCdssCheck({
-			medicationName,
-			patientLabHistory:  labResults,
-			existingMedications
-		});
+		// ── Step 3: Ollama clinical reasoning (with graceful fallback) ────────
+		let cdssResult;
+		try {
+			cdssResult = await runCdssCheck({
+				medicationName,
+				patientLabHistory:  labResults,
+				existingMedications
+			});
+		} catch (aiErr) {
+			console.warn("[CDSS] Ollama unavailable, using FDA-only fallback:", aiErr.message);
+			cdssResult = {
+				riskLevel:        fdaWarnings.length > 0 ? "caution" : "safe",
+				interactions:     [],
+				contraindications:[],
+				labConcerns:      [],
+				recommendation:   fdaWarnings.length > 0
+					? `FDA data found for ${medicationName}. Review warnings below before prescribing.`
+					: `No FDA warnings found for "${medicationName}". Verify the drug name and consult clinical references.`,
+				requiresAttention: fdaWarnings.length > 0,
+				aiNote:           "⚠️ AI analysis unavailable (Ollama offline). Showing FDA data only."
+			};
+		}
 
 		res.json({
 			success: true,
@@ -204,10 +224,7 @@ export async function cdssCheck(req, res) {
 
 	} catch (error) {
 		console.error("CDSS check error:", error.message);
-		if (error.message?.includes("OLLAMA") || error.message?.includes("connect")) {
-			return res.status(503).json({ success: false, error: "AI service unavailable. Ensure Ollama is running." });
-		}
-		res.status(500).json({ success: false, error: "CDSS check failed." });
+		res.status(500).json({ success: false, error: "CDSS check failed: " + error.message });
 	}
 }
 

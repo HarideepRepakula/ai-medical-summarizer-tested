@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { AppointmentModel } from "../models/Appointment.js";
 import { DoctorModel } from "../models/Doctor.js";
 import { UserModel } from "../models/User.js";
+import { MedicalRecordModel } from "../models/MedicalRecord.js";
 import { v4 as uuidv4 } from 'uuid';
 import {
 	notifyBookingConfirmed,
@@ -34,36 +35,23 @@ function hoursUntil(dateObj, timeStr) {
 }
 
 
-// Validation helper
 const validateAppointmentData = (data) => {
-	const { doctorId, appointmentDate, startTime, endTime, reason } = data;
+	const { doctorId, appointmentDate, startTime, reason } = data;
 
-	if (!doctorId || !appointmentDate || !startTime || !endTime || !reason) {
+	if (!doctorId || !appointmentDate || !startTime || !reason) {
 		throw new Error('Missing required fields');
 	}
 
-	const appointmentDateTime = new Date(appointmentDate);
-	if (appointmentDateTime < new Date()) {
-		throw new Error('Cannot book appointments in the past');
-	}
-
-	// Validate time format and logic
 	const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-	if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
+	if (!timeRegex.test(startTime)) {
 		throw new Error('Invalid time format. Use HH:MM');
 	}
 
-	const [startHour, startMin] = startTime.split(':').map(Number);
-	const [endHour, endMin]     = endTime.split(':').map(Number);
-	const startMinutes = startHour * 60 + startMin;
-	const endMinutes   = endHour   * 60 + endMin;
-
-	if (endMinutes <= startMinutes) {
-		throw new Error('End time must be after start time');
-	}
-
-	if (endMinutes - startMinutes < 15) {
-		throw new Error('Minimum appointment duration is 15 minutes');
+	if (data.endTime) {
+		if (!timeRegex.test(data.endTime)) throw new Error('Invalid time format. Use HH:MM');
+		const [sh, sm] = startTime.split(':').map(Number);
+		const [eh, em] = data.endTime.split(':').map(Number);
+		if ((eh * 60 + em) <= (sh * 60 + sm)) throw new Error('End time must be after start time');
 	}
 };
 
@@ -71,11 +59,22 @@ const validateAppointmentData = (data) => {
 
 export async function bookAppointment(req, res) {
 	try {
-		const { doctorId, appointmentDate, startTime, endTime, reason, notes, urgency = 'normal', visitType = 'regular' } = req.body;
+		const { doctorId, appointmentDate, startTime, endTime, reason, notes, urgency = 'normal', visitType = 'regular', consultNow = false } = req.body;
 		const patientId = req.user.userId;
 
-		// Validate input
-		validateAppointmentData({ doctorId, appointmentDate, startTime, endTime, reason: reason || visitType });
+		// Consult Now: use current date/time
+		const now = new Date();
+		const resolvedDate      = consultNow ? now.toISOString().split('T')[0] : appointmentDate;
+		const resolvedStartTime = consultNow
+			? `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
+			: startTime;
+		const resolvedEndTime   = endTime || (() => {
+			const [h, m] = resolvedStartTime.split(':').map(Number);
+			const em = m + 30;
+			return `${String(h + Math.floor(em/60)).padStart(2,'0')}:${String(em%60).padStart(2,'0')}`;
+		})();
+
+		validateAppointmentData({ doctorId, appointmentDate: resolvedDate, startTime: resolvedStartTime, endTime: resolvedEndTime, reason: reason || visitType });
 
 		// 1. Verify doctor exists
 		const doctor = await DoctorModel.findById(doctorId);
@@ -84,38 +83,35 @@ export async function bookAppointment(req, res) {
 		}
 
 		// 2. Check for conflicts
-		const conflicts = await AppointmentModel.findConflicts(
-			doctor.userId,
-			new Date(appointmentDate),
-			startTime,
-			endTime
-		);
+		
 
-		if (conflicts.length > 0) {
-			return res.status(409).json({ success: false, error: 'This time slot is already booked' });
-		}
-
-		// 3. Create appointment
-		const [startHour, startMin] = startTime.split(':').map(Number);
-		const [endHour, endMin]     = endTime.split(':').map(Number);
+		const [startHour, startMin] = resolvedStartTime.split(':').map(Number);
+		const [endHour, endMin]     = resolvedEndTime.split(':').map(Number);
 		const durationMinutes       = (endHour * 60 + endMin) - (startHour * 60 + startMin);
 
 		const appointment = await AppointmentModel.create({
 			patientId,
 			doctorId: doctor.userId,
-			appointmentDate: new Date(appointmentDate),
-			startTime,
-			endTime,
+			appointmentDate: new Date(resolvedDate),
+			startTime:       resolvedStartTime,
+			endTime:         resolvedEndTime,
 			durationMinutes,
 			reason: (reason || visitType).trim(),
 			notes: notes?.trim() || '',
-			urgency,
+			urgency: consultNow ? 'high' : urgency,
 			fee: doctor.consultationFee || 0,
 			createdBy: patientId,
-			status: 'pending'
+			status: consultNow ? 'confirmed' : 'pending'
 		});
 
-		// 4. Fire booking notification (async — don't block response)
+		// Sync file to Medical Records
+		if (req.file) {
+			try {
+				const BASE=process.env.UPLOADS_BASE_URL||"http://localhost:4000/uploads";
+				await MedicalRecordModel.create({patientId,recordName:req.file.originalname,fileName:req.file.originalname,fileUrl:BASE+"/"+req.file.filename,fileType:"Other",mimeType:req.file.mimetype,fileSize:req.file.size});
+			}catch(e){console.error("[BOOKING] MedicalRecord sync:",e.message);}
+		}
+
 		process.nextTick(async () => {
 			try {
 				const patient = await UserModel.findById(patientId).lean();
@@ -123,9 +119,9 @@ export async function bookAppointment(req, res) {
 					await notifyBookingConfirmed(patient, {
 						_id:        appointment._id,
 						doctorName: doctor.name,
-						date:       appointmentDate,
-						startTime,
-						endTime,
+						date:       resolvedDate,
+						startTime:  resolvedStartTime,
+						endTime:    resolvedEndTime,
 						reason
 					});
 				}
@@ -136,13 +132,13 @@ export async function bookAppointment(req, res) {
 
 		res.status(201).json({
 			success: true,
-			message: 'Appointment booked successfully',
+			message: consultNow ? 'Immediate consultation booked' : 'Appointment booked successfully',
 			data: {
 				appointmentId: appointment._id,
 				doctorName:    doctor.name,
-				date:          appointmentDate,
-				time:          `${startTime} - ${endTime}`,
-				status:        'pending',
+				date:          resolvedDate,
+				time:          `${resolvedStartTime} - ${resolvedEndTime}`,
+				status:        appointment.status,
 				fee:           appointment.fee
 			}
 		});
@@ -484,351 +480,185 @@ export async function getConsultationState(req, res) {
 // ─── Update Appointment Status ────────────────────────────────────────────────
 
 export async function updateAppointmentStatus(req, res) {
-	const session = await mongoose.startSession();
-
 	try {
 		const { id }              = req.params;
-		const { status, reason, version } = req.body;
+		const { status, reason }  = req.body;
 		const userId              = req.user.userId;
 
 		if (!['pending', 'confirmed', 'cancelled', 'completed', 'in_progress', 'no_show'].includes(status)) {
 			return res.status(400).json({ success: false, error: 'Invalid status' });
 		}
 
-		await session.withTransaction(async () => {
-			// Find appointment with version check
-			const appointment = await AppointmentModel.findOne({
-				_id:     id,
-				version: version || 0
-			}).session(session);
+		const appointment = await AppointmentModel.findById(id);
+		if (!appointment) {
+			return res.status(404).json({ success: false, error: 'Appointment not found' });
+		}
 
-			if (!appointment) {
-				throw new Error('APPOINTMENT_NOT_FOUND_OR_MODIFIED');
-			}
+		if (appointment.patientId.toString() !== userId && appointment.doctorId.toString() !== userId) {
+			return res.status(403).json({ success: false, error: 'Unauthorized' });
+		}
 
-			// Authorization check
-			if (
-				appointment.patientId.toString() !== userId &&
-				appointment.doctorId.toString()  !== userId
-			) {
-				throw new Error('UNAUTHORIZED');
-			}
+		const validTransitions = {
+			'pending':     ['confirmed', 'cancelled'],
+			'confirmed':   ['in_progress', 'cancelled', 'no_show'],
+			'in_progress': ['completed', 'cancelled'],
+			'completed':   [],
+			'cancelled':   [],
+			'no_show':     []
+		};
 
-			// Status transition validation
-			const validTransitions = {
-				'pending':     ['confirmed', 'cancelled'],
-				'confirmed':   ['in_progress', 'cancelled', 'no_show'],
-				'in_progress': ['completed', 'cancelled'],
-				'completed':   [],
-				'cancelled':   [],
-				'no_show':     []
-			};
+		if (!validTransitions[appointment.status]?.includes(status)) {
+			return res.status(400).json({ success: false, error: 'Invalid status transition' });
+		}
 
-			if (!validTransitions[appointment.status].includes(status)) {
-				throw new Error('INVALID_STATUS_TRANSITION');
-			}
+		const updated = await AppointmentModel.findByIdAndUpdate(
+			id,
+			{
+				status,
+				lastModifiedBy: userId,
+				...(status === 'cancelled' && { cancellationReason: reason, cancelledAt: new Date(), cancelledBy: userId }),
+				$inc: { version: 1 }
+			},
+			{ new: true }
+		);
 
-			// Update appointment
-			const updatedAppointment = await AppointmentModel.findByIdAndUpdate(
-				id,
-				{
-					status,
-					lastModifiedBy: userId,
-					...(status === 'cancelled' && {
-						cancellationReason: reason,
-						cancelledAt:        new Date(),
-						cancelledBy:        userId
-					}),
-					$inc: { version: 1 }
-				},
-				{ new: true, session }
-			);
-
-			res.json({
-				success: true,
-				message: 'Appointment updated successfully',
-				data: {
-					id:      updatedAppointment._id,
-					status:  updatedAppointment.status,
-					version: updatedAppointment.version
-				}
-			});
-		});
+		res.json({ success: true, message: 'Appointment updated successfully', data: { id: updated._id, status: updated.status, version: updated.version } });
 
 	} catch (error) {
 		console.error('Update appointment error:', error);
-
-		const errorMessages = {
-			'APPOINTMENT_NOT_FOUND_OR_MODIFIED': 'Appointment not found or was modified by another user',
-			'UNAUTHORIZED':                      'You are not authorized to update this appointment',
-			'INVALID_STATUS_TRANSITION':         'Invalid status transition'
-		};
-
-		const message    = errorMessages[error.message] || 'Failed to update appointment';
-		const statusCode = error.message === 'UNAUTHORIZED' ? 403 : 400;
-
-		res.status(statusCode).json({ success: false, error: message });
-	} finally {
-		await session.endSession();
+		res.status(500).json({ success: false, error: 'Failed to update appointment' });
 	}
 }
 
 // ─── Cancel Appointment (3-Hour Rule) ────────────────────────────────────────
 
 export async function cancelAppointment(req, res) {
-	const session = await mongoose.startSession();
-
 	try {
-		const { id }   = req.params;
+		const { id } = req.params;
 		const { reason } = req.body;
-		const userId   = req.user.userId;
+		const userId = req.user.userId;
 		const userRole = req.user.role;
 
-		await session.withTransaction(async () => {
-			const appointment = await AppointmentModel.findById(id).session(session);
+		const appointment = await AppointmentModel.findById(id);
+		if (!appointment) return res.status(404).json({ success: false, error: 'Appointment not found' });
 
-			if (!appointment) {
-				throw new Error('APPOINTMENT_NOT_FOUND');
-			}
+		if (appointment.patientId.toString() !== userId && appointment.doctorId.toString() !== userId)
+			return res.status(403).json({ success: false, error: 'Unauthorized' });
 
-			// Authorization check
-			if (
-				appointment.patientId.toString() !== userId &&
-				appointment.doctorId.toString()  !== userId
-			) {
-				throw new Error('UNAUTHORIZED');
-			}
+		if (!['pending', 'confirmed'].includes(appointment.status))
+			return res.status(400).json({ success: false, error: 'This appointment cannot be cancelled' });
 
-			if (!['pending', 'confirmed'].includes(appointment.status)) {
-				throw new Error('CANNOT_CANCEL_APPOINTMENT');
-			}
+		if (userRole === 'PATIENT') {
+			const hrs = hoursUntil(appointment.appointmentDate, appointment.startTime);
+			if (hrs < 3) return res.status(423).json({ success: false, error: 'Appointments cannot be cancelled less than 3 hours before the scheduled time.' });
+		}
 
-			// ── 3-Hour Rule (applies to patients only) ─────────────────────────
-			if (userRole === 'PATIENT') {
-				const hrs = hoursUntil(appointment.appointmentDate, appointment.startTime);
-				if (hrs < 3) {
-					throw new Error('THREE_HOUR_LOCK');
-				}
-			}
-			// ──────────────────────────────────────────────────────────────────
-
-			// Update appointment status
-			await AppointmentModel.findByIdAndUpdate(
-				id,
-				{
-					status:             'cancelled',
-					cancellationReason: reason || 'No reason provided',
-					cancelledAt:        new Date(),
-					cancelledBy:        userId,
-					lastModifiedBy:     userId,
-					$inc: { version: 1 }
-				},
-				{ session }
-			);
-
-			// Notify patient if doctor cancelled
-			process.nextTick(async () => {
-				try {
-					const patient = await UserModel.findById(appointment.patientId).lean();
-					if (patient) {
-						const populatedApt = await AppointmentModel.findById(id).populate('doctorId', 'name').lean();
-						await notifyCancellation(
-							patient,
-							{
-								_id:        appointment._id,
-								doctorName: populatedApt?.doctorId?.name || 'Your doctor',
-								date:       appointment.appointmentDate?.toISOString().split('T')[0],
-								startTime:  appointment.startTime
-							},
-							userId === appointment.patientId.toString() ? 'Patient' : 'Doctor'
-						);
-					}
-				} catch (err) {
-					console.error('[NOTIFICATION] Cancellation notification failed:', err.message);
-				}
-			});
-
-			res.json({ success: true, message: 'Appointment cancelled successfully' });
+		await AppointmentModel.findByIdAndUpdate(id, {
+			status: 'cancelled',
+			cancellationReason: reason || 'No reason provided',
+			cancelledAt: new Date(),
+			cancelledBy: userId,
+			lastModifiedBy: userId,
+			'$inc': { version: 1 }
 		});
 
+		process.nextTick(async () => {
+			try {
+				const patient = await UserModel.findById(appointment.patientId).lean();
+				if (patient) {
+					const pop = await AppointmentModel.findById(id).populate('doctorId', 'name').lean();
+					await notifyCancellation(patient, {
+						_id: appointment._id,
+						doctorName: pop?.doctorId?.name || 'Your doctor',
+						date: appointment.appointmentDate?.toISOString().split('T')[0],
+						startTime: appointment.startTime
+					}, userId === appointment.patientId.toString() ? 'Patient' : 'Doctor');
+				}
+			} catch (err) { console.error('[NOTIFICATION] Cancellation failed:', err.message); }
+		});
+
+		res.json({ success: true, message: 'Appointment cancelled successfully' });
 	} catch (error) {
 		console.error('Cancel appointment error:', error);
-
-		const errorMessages = {
-			'APPOINTMENT_NOT_FOUND':    'Appointment not found',
-			'UNAUTHORIZED':             'You are not authorized to cancel this appointment',
-			'CANNOT_CANCEL_APPOINTMENT': 'This appointment cannot be cancelled',
-			'THREE_HOUR_LOCK':          'Appointments cannot be cancelled less than 3 hours before the scheduled time. Please contact the clinic directly.'
-		};
-
-		const message    = errorMessages[error.message] || 'Failed to cancel appointment';
-		const statusCode = error.message === 'UNAUTHORIZED' ? 403
-			: error.message === 'THREE_HOUR_LOCK' ? 423
-			: 400;
-
-		res.status(statusCode).json({ success: false, error: message });
-	} finally {
-		await session.endSession();
+		res.status(500).json({ success: false, error: 'Failed to cancel appointment' });
 	}
 }
 
 // ─── Reschedule Appointment (3-Hour Rule) ────────────────────────────────────
 
 export async function rescheduleAppointment(req, res) {
-	const session = await mongoose.startSession();
-
 	try {
-		const { id }   = req.params;
+		const { id } = req.params;
 		const { newDate, newStartTime, newEndTime, reason } = req.body;
-		const userId   = req.user.userId;
+		const userId = req.user.userId;
 		const userRole = req.user.role;
 
-		// Validate new appointment data
-		validateAppointmentData({
-			doctorId:        'temp',
-			appointmentDate: newDate,
-			startTime:       newStartTime,
-			endTime:         newEndTime,
-			reason:          'reschedule'
+		const resolvedEndTime = newEndTime || (() => {
+			const [h, m] = newStartTime.split(':').map(Number);
+			const em = m + 30;
+			return String(h + Math.floor(em / 60)).padStart(2, '0') + ':' + String(em % 60).padStart(2, '0');
+		})();
+
+		validateAppointmentData({ doctorId: 'temp', appointmentDate: newDate, startTime: newStartTime, endTime: resolvedEndTime, reason: 'reschedule' });
+
+		const orig = await AppointmentModel.findById(id);
+		if (!orig) return res.status(404).json({ success: false, error: 'Appointment not found' });
+
+		if (orig.patientId.toString() !== userId && orig.doctorId.toString() !== userId)
+			return res.status(403).json({ success: false, error: 'Unauthorized' });
+
+		if (!['pending', 'confirmed'].includes(orig.status))
+			return res.status(400).json({ success: false, error: 'This appointment cannot be rescheduled' });
+
+		if (orig.rescheduledCount >= 3)
+			return res.status(400).json({ success: false, error: 'Maximum reschedule limit reached (3)' });
+
+		if (userRole === 'PATIENT') {
+			const hrs = hoursUntil(orig.appointmentDate, orig.startTime);
+			if (hrs < 3) return res.status(423).json({ success: false, error: 'Appointments cannot be rescheduled less than 3 hours before the scheduled time.' });
+		}
+
+		const conflicts = await AppointmentModel.findConflicts(orig.doctorId, new Date(newDate), newStartTime, resolvedEndTime, id);
+		if (conflicts.length > 0) return res.status(409).json({ success: false, error: 'The new time slot is already booked' });
+
+		const [rsh, rsm] = newStartTime.split(':').map(Number);
+		const [reh, rem] = resolvedEndTime.split(':').map(Number);
+
+		const newApt = await AppointmentModel.create({
+			patientId: orig.patientId, doctorId: orig.doctorId,
+			appointmentDate: new Date(newDate), startTime: newStartTime, endTime: resolvedEndTime,
+			durationMinutes: (reh * 60 + rem) - (rsh * 60 + rsm),
+			reason: orig.reason,
+			notes: (orig.notes || '') + '\n[Rescheduled: ' + (reason || 'No reason provided') + ']',
+			urgency: orig.urgency, fee: orig.fee, createdBy: orig.createdBy,
+			originalAppointmentId: orig._id, rescheduledCount: orig.rescheduledCount + 1, status: 'pending'
 		});
 
-		await session.withTransaction(async () => {
-			const originalAppointment = await AppointmentModel.findById(id).session(session);
+		await AppointmentModel.findByIdAndUpdate(id, {
+			status: 'cancelled',
+			cancellationReason: 'Rescheduled to ' + newDate + ' ' + newStartTime,
+			cancelledAt: new Date(), cancelledBy: userId,
+			rescheduledToId: newApt._id, lastModifiedBy: userId,
+			'$inc': { version: 1 }
+		});
 
-			if (!originalAppointment) {
-				throw new Error('APPOINTMENT_NOT_FOUND');
-			}
-
-			// Authorization check
-			if (
-				originalAppointment.patientId.toString() !== userId &&
-				originalAppointment.doctorId.toString()  !== userId
-			) {
-				throw new Error('UNAUTHORIZED');
-			}
-
-			if (!['pending', 'confirmed'].includes(originalAppointment.status)) {
-				throw new Error('CANNOT_RESCHEDULE_APPOINTMENT');
-			}
-
-			if (originalAppointment.rescheduledCount >= 3) {
-				throw new Error('MAX_RESCHEDULES_REACHED');
-			}
-
-			// ── 3-Hour Rule (applies to patients only) ─────────────────────────
-			if (userRole === 'PATIENT') {
-				const hrs = hoursUntil(originalAppointment.appointmentDate, originalAppointment.startTime);
-				if (hrs < 3) {
-					throw new Error('THREE_HOUR_LOCK');
-				}
-			}
-			// ──────────────────────────────────────────────────────────────────
-
-			// Check for conflicts in new slot
-			const conflicts = await AppointmentModel.findConflicts(
-				originalAppointment.doctorId,
-				new Date(newDate),
-				newStartTime,
-				newEndTime,
-				id
-			);
-
-			if (conflicts.length > 0) {
-				throw new Error('NEW_SLOT_ALREADY_BOOKED');
-			}
-
-			// Create new appointment
-			const [rsh, rsm] = newStartTime.split(':').map(Number);
-			const [reh, rem] = newEndTime.split(':').map(Number);
-			const newDuration = (reh * 60 + rem) - (rsh * 60 + rsm);
-
-			const newAppointment = await AppointmentModel.create([{
-				patientId:             originalAppointment.patientId,
-				doctorId:              originalAppointment.doctorId,
-				appointmentDate:       new Date(newDate),
-				startTime:             newStartTime,
-				endTime:               newEndTime,
-				durationMinutes:       newDuration,
-				reason:                originalAppointment.reason,
-				notes:                 originalAppointment.notes + `\n[Rescheduled: ${reason || 'No reason provided'}]`,
-				urgency:               originalAppointment.urgency,
-				fee:                   originalAppointment.fee,
-				createdBy:             originalAppointment.createdBy,
-				originalAppointmentId: originalAppointment._id,
-				rescheduledCount:      originalAppointment.rescheduledCount + 1,
-				status:                'pending'
-			}], { session });
-
-			// Update original appointment
-			await AppointmentModel.findByIdAndUpdate(
-				id,
-				{
-					status:             'cancelled',
-					cancellationReason: `Rescheduled to ${newDate} ${newStartTime}`,
-					cancelledAt:        new Date(),
-					cancelledBy:        userId,
-					rescheduledToId:    newAppointment[0]._id,
-					lastModifiedBy:     userId,
-					$inc: { version: 1 }
-				},
-				{ session }
-			);
-
-			// Notify patient if doctor rescheduled
-			if (userRole === 'DOCTOR') {
-				process.nextTick(async () => {
-					try {
-						const patient    = await UserModel.findById(originalAppointment.patientId).lean();
-						const doctorUser = await UserModel.findById(userId).lean();
-						if (patient) {
-							await notifyDoctorReschedule(patient, {
-								_id:        originalAppointment._id,
-								doctorName: doctorUser?.name || 'Your doctor',
-								date:       originalAppointment.appointmentDate?.toISOString().split('T')[0],
-								startTime:  originalAppointment.startTime
-							}, {
-								_id:       newAppointment[0]._id,
-								date:      newDate,
-								startTime: newStartTime
-							});
-						}
-					} catch (err) {
-						console.error('[NOTIFICATION] Reschedule notification failed:', err.message);
-					}
-				});
-			}
-
-			res.json({
-				success: true,
-				message: 'Appointment rescheduled successfully',
-				data: {
-					newAppointmentId: newAppointment[0]._id,
-					date:             newDate,
-					time:             `${newStartTime} - ${newEndTime}`
-				}
+		if (userRole === 'DOCTOR') {
+			process.nextTick(async () => {
+				try {
+					const patient = await UserModel.findById(orig.patientId).lean();
+					const doc = await UserModel.findById(userId).lean();
+					if (patient) await notifyDoctorReschedule(patient,
+						{ _id: orig._id, doctorName: doc?.name || 'Your doctor', date: orig.appointmentDate?.toISOString().split('T')[0], startTime: orig.startTime },
+						{ _id: newApt._id, date: newDate, startTime: newStartTime }
+					);
+				} catch (err) { console.error('[NOTIFICATION] Reschedule failed:', err.message); }
 			});
-		});
+		}
 
+		res.json({ success: true, message: 'Appointment rescheduled successfully', data: { newAppointmentId: newApt._id, date: newDate, time: newStartTime + ' - ' + resolvedEndTime } });
 	} catch (error) {
 		console.error('Reschedule appointment error:', error);
-
-		const errorMessages = {
-			'APPOINTMENT_NOT_FOUND':          'Appointment not found',
-			'UNAUTHORIZED':                   'You are not authorized to reschedule this appointment',
-			'CANNOT_RESCHEDULE_APPOINTMENT':  'This appointment cannot be rescheduled',
-			'MAX_RESCHEDULES_REACHED':        'Maximum reschedule limit reached (3)',
-			'NEW_SLOT_ALREADY_BOOKED':        'The new time slot is already booked',
-			'THREE_HOUR_LOCK':                'Appointments cannot be rescheduled less than 3 hours before the scheduled time. Please contact the clinic directly.'
-		};
-
-		const message    = errorMessages[error.message] || 'Failed to reschedule appointment';
-		const statusCode = error.message === 'UNAUTHORIZED' ? 403
-			: error.message === 'THREE_HOUR_LOCK' ? 423
-			: 400;
-
-		res.status(statusCode).json({ success: false, error: message });
-	} finally {
-		await session.endSession();
+		res.status(500).json({ success: false, error: error.message || 'Failed to reschedule appointment' });
 	}
 }
 

@@ -149,6 +149,7 @@ class ApiService {
 
 	// ── Medical Records ───────────────────────────────────────────────────────
 	async getMedicalRecords() { return this.request('/medical-records'); }
+	async getPatientMedicalRecords(patientId) { return this.request(`/medical-records/patient/${patientId}`); }
 	async uploadMedicalRecord(file, recordName, type) {
 		const fd = new FormData();
 		fd.append('file', file);

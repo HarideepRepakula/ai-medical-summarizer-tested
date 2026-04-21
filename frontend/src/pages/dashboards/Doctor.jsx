@@ -63,14 +63,19 @@ function RescheduleCancelModal({ appointment, onClose, onDone }) {
 							<label className="label">New Date</label>
 							<input type="date" className="input" value={newDate} onChange={e => setNewDate(e.target.value)} />
 						</div>
-						<div className="grid grid-cols-2 gap-3">
-							<div>
-								<label className="label">Start Time</label>
-								<input type="time" className="input" value={newStart} onChange={e => setNewStart(e.target.value)} />
-							</div>
-							<div>
-								<label className="label">End Time</label>
-								<input type="time" className="input" value={newEnd} onChange={e => setNewEnd(e.target.value)} />
+						<div>
+							<label className="label">Time Slot <span className="text-xs text-text-secondary font-normal">(30 min)</span></label>
+							<div className="grid grid-cols-4 gap-1.5 mt-1">
+								{[
+									{s:'09:00',l:'9:00 AM'},{s:'09:30',l:'9:30 AM'},{s:'10:00',l:'10:00 AM'},{s:'10:30',l:'10:30 AM'},
+									{s:'11:00',l:'11:00 AM'},{s:'11:30',l:'11:30 AM'},{s:'14:00',l:'2:00 PM'},{s:'14:30',l:'2:30 PM'},
+									{s:'15:00',l:'3:00 PM'},{s:'15:30',l:'3:30 PM'},{s:'16:00',l:'4:00 PM'},{s:'16:30',l:'4:30 PM'}
+								].map(({s,l}) => (
+									<button key={s} type="button"
+										className={`py-1.5 px-1 rounded-lg text-xs font-medium border transition-all ${newStart===s?'bg-primary-600 text-white border-primary-600':'bg-white text-text-secondary border-gray-200 hover:border-primary-300 hover:bg-primary-50'}`}
+										onClick={() => { const [h,m]=s.split(':').map(Number); const em=m+30; setNewStart(s); setNewEnd(String(h+Math.floor(em/60)).padStart(2,'0')+':'+String(em%60).padStart(2,'0')); }}
+									>{l}</button>
+								))}
 							</div>
 						</div>
 						<div>
@@ -176,6 +181,185 @@ function DoctorRecentConsultations({ appointments, onViewRecords }) {
 	);
 }
 
+const DEFAULT_SCHEDULE = [
+	{ id: 1, day: 'Monday',    startTime: '09:00', endTime: '17:00', date: '', type: 'available' },
+	{ id: 2, day: 'Tuesday',   startTime: '09:00', endTime: '17:00', date: '', type: 'available' },
+	{ id: 3, day: 'Wednesday', startTime: '09:00', endTime: '17:00', date: '', type: 'available' },
+	{ id: 4, day: 'Thursday',  startTime: '09:00', endTime: '17:00', date: '', type: 'available' },
+	{ id: 5, day: 'Friday',    startTime: '09:00', endTime: '17:00', date: '', type: 'available' },
+];
+
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+
+function ScheduleManagement() {
+	const [slots, setSlots] = useState(DEFAULT_SCHEDULE);
+	const [modal, setModal] = useState(null); // 'add' | 'block'
+	const [useDate, setUseDate] = useState(false);
+	const [form, setForm] = useState({ day: 'Monday', date: '', startTime: '09:00', endTime: '10:00' });
+	const [deleteTarget, setDeleteTarget] = useState(null); // slot to confirm delete
+
+	function openModal(type) {
+		setModal(type);
+		setUseDate(false);
+		setForm({ day: 'Monday', date: '', startTime: '09:00', endTime: '10:00' });
+	}
+
+	function confirm() {
+		const label = useDate ? form.date : form.day;
+		if (!label || !form.startTime || !form.endTime) return;
+		setSlots(prev => [...prev, {
+			id: Date.now(),
+			day: useDate ? '' : form.day,
+			date: useDate ? form.date : '',
+			startTime: form.startTime,
+			endTime: form.endTime,
+			type: modal === 'add' ? 'available' : 'blocked',
+		}]);
+		setModal(null);
+	}
+
+	function confirmDelete() {
+		setSlots(prev => prev.filter(x => x.id !== deleteTarget.id));
+		setDeleteTarget(null);
+	}
+
+	return (
+		<div className="space-y-6 animate-fade-in">
+			<div className="section-header">
+				<h1 className="text-2xl font-bold">Schedule Management</h1>
+				<div className="flex gap-2">
+					<button className="btn-primary btn-sm" onClick={() => openModal('add')}>📅 Add Slot</button>
+					<button className="btn-secondary btn-sm" onClick={() => openModal('block')}>🚫 Block Time</button>
+				</div>
+			</div>
+
+			<div className="card overflow-hidden p-0">
+				<table className="table-clinical">
+					<thead>
+						<tr><th>Status</th><th>Day / Date</th><th>Time Range</th><th></th></tr>
+					</thead>
+					<tbody>
+						{slots.length === 0 ? (
+							<tr><td colSpan={4} className="text-center py-10 text-text-secondary text-sm">No slots yet.</td></tr>
+						) : slots.map(s => (
+							<tr key={s.id}>
+								<td>
+									<span className={`badge ${s.type === 'available' ? 'badge-success' : 'badge-danger'}`}>
+										{s.type === 'available' ? 'Available' : 'Blocked'}
+									</span>
+								</td>
+								<td className="text-sm font-medium">{s.date ? new Date(s.date + 'T00:00:00').toLocaleDateString() : s.day}</td>
+								<td className="text-sm">{s.startTime} – {s.endTime}</td>
+								<td>
+									<button
+										onClick={() => setDeleteTarget(s)}
+										title="Remove slot"
+										className="btn-ghost btn-sm text-danger-500 hover:text-danger-700 hover:bg-danger-50 transition-colors"
+									>🗑️</button>
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			</div>
+
+			{/* Delete confirmation */}
+			{deleteTarget && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+					<div className="bg-white rounded-clinical shadow-clinical-lg w-full max-w-sm mx-4 p-6 animate-fade-in">
+						<div className="flex items-center gap-3 mb-3">
+							<span className="text-2xl">🗑️</span>
+							<h3 className="font-semibold text-text-primary">Remove Slot?</h3>
+						</div>
+						<p className="text-sm text-text-secondary mb-1">
+							<span className={`badge ${deleteTarget.type === 'available' ? 'badge-success' : 'badge-danger'} mr-2`}>
+								{deleteTarget.type === 'available' ? 'Available' : 'Blocked'}
+							</span>
+							{deleteTarget.date ? new Date(deleteTarget.date + 'T00:00:00').toLocaleDateString() : deleteTarget.day}
+							{' — '}{deleteTarget.startTime} – {deleteTarget.endTime}
+						</p>
+						<p className="text-xs text-text-secondary mb-5">
+							{deleteTarget.type === 'blocked'
+								? 'This will unblock the time and make it available for appointments.'
+								: 'This will remove the availability slot. Existing appointments are not affected.'}
+						</p>
+						<div className="flex justify-end gap-3">
+							<button onClick={() => setDeleteTarget(null)} className="btn-ghost">Cancel</button>
+							<button onClick={confirmDelete} className="btn-danger">Remove</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{modal && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+					<div className="bg-white rounded-clinical shadow-clinical-lg w-full max-w-md mx-4 p-6 animate-fade-in">
+						<div className="flex items-center justify-between mb-4">
+							<h3 className="font-semibold text-text-primary">
+								{modal === 'add' ? '📅 Add Availability Slot' : '🚫 Block Time'}
+							</h3>
+							<button onClick={() => setModal(null)} className="text-text-secondary hover:text-text-primary text-lg">✕</button>
+						</div>
+
+						<div className="space-y-4">
+							{/* Toggle weekly vs specific date */}
+							<div className="flex gap-2">
+								<button
+									onClick={() => setUseDate(false)}
+									className={`flex-1 py-2 text-xs rounded-clinical border transition ${
+										!useDate ? 'bg-primary-50 border-primary-200 text-primary-700 font-medium' : 'border-gray-200 text-text-secondary'
+									}`}
+								>Weekly (Day)</button>
+								<button
+									onClick={() => setUseDate(true)}
+									className={`flex-1 py-2 text-xs rounded-clinical border transition ${
+										useDate ? 'bg-primary-50 border-primary-200 text-primary-700 font-medium' : 'border-gray-200 text-text-secondary'
+									}`}
+								>Specific Date</button>
+							</div>
+
+							{useDate ? (
+								<div>
+									<label className="label">Date</label>
+									<input type="date" className="input" value={form.date} onChange={e => setForm(f => ({...f, date: e.target.value}))} />
+								</div>
+							) : (
+								<div>
+									<label className="label">Day of Week</label>
+									<select className="input" value={form.day} onChange={e => setForm(f => ({...f, day: e.target.value}))}>
+										{DAYS.map(d => <option key={d}>{d}</option>)}
+									</select>
+								</div>
+							)}
+
+							<div className="grid grid-cols-2 gap-3">
+								<div>
+									<label className="label">Start Time</label>
+									<input type="time" className="input" value={form.startTime} onChange={e => setForm(f => ({...f, startTime: e.target.value}))} />
+								</div>
+								<div>
+									<label className="label">End Time</label>
+									<input type="time" className="input" value={form.endTime} onChange={e => setForm(f => ({...f, endTime: e.target.value}))} />
+								</div>
+							</div>
+						</div>
+
+						<div className="flex justify-end gap-3 mt-6">
+							<button onClick={() => setModal(null)} className="btn-ghost">Cancel</button>
+							<button
+								onClick={confirm}
+								className={modal === 'add' ? 'btn-primary' : 'btn-danger'}
+							>
+								{modal === 'add' ? 'Add Slot' : 'Block Time'}
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+		</div>
+	);
+}
+
 export default function DoctorDashboard() {
 	const [activeTab, setActiveTab] = useState('dashboard');
 	const [appointments, setAppointments] = useState([]);
@@ -219,7 +403,7 @@ export default function DoctorDashboard() {
 
 	function openConsultView(apt) { setConsultView(apt); setActiveTab('consult-view'); }
 	function openRecordsView(apt) { setRecordsView(apt); setActiveTab('records-view'); }
-	function backFromConsultView() { setConsultView(null); setActiveTab('appointments'); loadAppointments(); }
+	function backFromConsultView() { setConsultView(null); setActiveTab('appointments'); loadAppointments(); loadPatients(); }
 	function backFromRecordsView() { setRecordsView(null); setActiveTab('appointments'); }
 
 	const upcomingAppointments = appointments.filter(a => a.status !== 'completed' && a.status !== 'cancelled');
@@ -409,21 +593,7 @@ export default function DoctorDashboard() {
 			)}
 
 			{/* ── SCHEDULE ── */}
-			{activeTab === 'schedule' && (
-				<div className="space-y-6 animate-fade-in">
-					<div className="section-header">
-						<h1 className="text-2xl font-bold">Schedule Management</h1>
-						<div className="flex gap-2">
-							<button className="btn-primary btn-sm">📅 Add Slot</button>
-							<button className="btn-secondary btn-sm">🚫 Block Time</button>
-						</div>
-					</div>
-					<div className="card text-center py-12">
-						<span className="text-4xl block mb-3">🗓️</span>
-						<p className="text-text-secondary">Manage your availability and time slots here.</p>
-					</div>
-				</div>
-			)}
+			{activeTab === 'schedule' && <ScheduleManagement />}
 
 			{/* ── AI TOOLS ── */}
 			{activeTab === 'ai-tools' && (
@@ -452,10 +622,10 @@ export default function DoctorDashboard() {
 							<p className="text-sm text-text-secondary mb-4">Check drug interactions and contraindications before prescribing.</p>
 							<div className="flex gap-3">
 								<input id="cdss-med-input" type="text" placeholder="Enter medication name (e.g., Metformin)" className="input flex-1"
-									onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) setCdssTarget({ medication: e.target.value.trim(), patientId: 'demo' }); }} />
+									onKeyDown={e => { if (e.key === 'Enter' && e.target.value.trim()) setCdssTarget({ medication: e.target.value.trim(), patientId: currentUser.id || currentUser._id || currentUser.userId }); }} />
 								<button className="btn-ai btn-sm" onClick={() => {
 									const v = document.getElementById('cdss-med-input')?.value?.trim();
-									if (v) setCdssTarget({ medication: v, patientId: 'demo' });
+									if (v) setCdssTarget({ medication: v, patientId: currentUser.id || currentUser._id || currentUser.userId });
 								}}>🔍 Check Safety</button>
 							</div>
 						</div>

@@ -176,6 +176,8 @@ export async function reVerifyDoctor(req, res) {
  * GET /api/admin/security/locked-accounts
  * Returns all currently locked accounts with lock reason.
  */
+export async function manualApproveDoctor(req,res){try{const{doctorId}=req.params;const doctor=await DoctorModel.findByIdAndUpdate(doctorId,{isVerified:true,verificationStatus:"approved",verifiedAt:new Date(),adminNote:"Manually approved by admin."},{new:true});if(!doctor)return res.status(404).json({success:false,error:"Doctor not found."});res.json({success:true,message:"Doctor approved successfully."});}catch(e){res.status(500).json({success:false,error:"Approval failed."})}}
+
 export async function getLockedAccounts(req, res) {
 	try {
 		const now     = new Date();

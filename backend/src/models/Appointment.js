@@ -29,14 +29,14 @@ const AppointmentSchema = new Schema(
 		},
 		endTime: { 
 			type: String, 
-			required: true,
+			required: false,
 			match: /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/
 		},
 		durationMinutes: {
 			type: Number,
-			required: true,
-			min: 15,
-			max: 480 // 8 hours max
+			required: false,
+			min: 0,
+			max: 480
 		},
 		timezone: {
 			type: String,
@@ -222,17 +222,22 @@ AppointmentSchema.virtual('endDateTime').get(function() {
 
 // Pre-save middleware for validation and audit
 AppointmentSchema.pre('save', function(next) {
-	// Validate time logic
-	const start = this.startTime.split(':').map(Number);
-	const end = this.endTime.split(':').map(Number);
-	const startMinutes = start[0] * 60 + start[1];
-	const endMinutes = end[0] * 60 + end[1];
-	
-	if (endMinutes <= startMinutes) {
-		return next(new Error('End time must be after start time'));
+	if (this.startTime && this.endTime) {
+		const start = this.startTime.split(':').map(Number);
+		const end   = this.endTime.split(':').map(Number);
+		const startMinutes = start[0] * 60 + start[1];
+		const endMinutes   = end[0]   * 60 + end[1];
+		if (endMinutes <= startMinutes) {
+			return next(new Error('End time must be after start time'));
+		}
+		this.durationMinutes = endMinutes - startMinutes;
+	} else if (this.startTime && !this.endTime) {
+		// Default 30-minute slot when no endTime provided
+		const [h, m] = this.startTime.split(':').map(Number);
+		const endM = m + 30;
+		this.endTime = `${String(h + Math.floor(endM / 60)).padStart(2,'0')}:${String(endM % 60).padStart(2,'0')}`;
+		this.durationMinutes = 30;
 	}
-	
-	this.durationMinutes = endMinutes - startMinutes;
 	
 	// Update status history on status change
 	if (this.isModified('status') && !this.isNew) {

@@ -6,9 +6,13 @@ const MedicalRecordSchema = new Schema(
 		recordName: { type: String, required: true, maxlength: 200 },
 		fileUrl:    { type: String, required: true },
 		fileName:   { type: String, required: true },
-		fileType:   { type: String, enum: ["Lab Report", "Prescription", "Scan", "Other"], default: "Other" },
+		fileType:   { type: String, enum: ["Lab Report", "Prescription", "Scan", "Other", "Consultation Upload"], default: "Other" },
 		mimeType:   { type: String },
 		fileSize:   { type: Number },
+		appointmentId: { type: Schema.Types.ObjectId, ref: "Appointment", default: null },
+		// AI-generated summary cached after upload
+		aiSummary:  { type: String, default: '' },
+		aiSummaryGeneratedAt: { type: Date },
 		uploadedAt: { type: Date, default: Date.now }
 	},
 	{ timestamps: true }

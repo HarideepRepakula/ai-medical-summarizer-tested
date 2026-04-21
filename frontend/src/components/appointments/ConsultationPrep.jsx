@@ -233,6 +233,7 @@ export default function ConsultationPrep({ appointment, onBack }) {
 						fileName: file.name, fileType: file.type,
 						uploadedAt: new Date().toISOString(), fileUrl: res.data?.fileUrl || '#'
 					}]);
+					try{await apiService.uploadMedicalRecord(file,file.name,"Consultation Upload");}catch(e){console.warn(e.message);}
 				}
 			}
 		} catch (err) { console.error('Upload failed:', err); }
@@ -523,11 +524,11 @@ export default function ConsultationPrep({ appointment, onBack }) {
 							</div>
 						) : (
 							<div className="flex-1 flex flex-col">
-								<div className="flex-1 bg-gray-900 rounded-clinical overflow-hidden relative min-h-[300px] mb-4">
+								<div className="rounded-xl overflow-hidden border-2 border-primary-500 shadow-2xl bg-gray-900 mb-4" style={{ height: 420 }}>
 									<iframe
-										src={`https://meet.jit.si/ClinIQ-${appointment.id}#config.startWithAudioMuted=false&config.startWithVideoMuted=false&config.prejoinPageEnabled=false`}
-										style={{ width: '100%', height: '100%', border: 'none', minHeight: '300px' }}
-										allow="camera;microphone;display-capture"
+										src={`https://meet.jit.si/${appointment.id}#config.prejoinPageEnabled=false&config.startWithAudioMuted=false&config.startWithVideoMuted=false&config.disableModeratorIndicator=true&config.enableWelcomePage=false&config.enableClosePage=false&userInfo.displayName=Patient`}
+										style={{ width: '100%', height: '100%', border: 'none', minHeight: '420px' }}
+										allow="camera; microphone; display-capture; autoplay"
 										title="ClinIQ Video Consultation"
 									/>
 								</div>
