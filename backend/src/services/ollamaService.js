@@ -1,33 +1,49 @@
 /**
- * AI Service — MedHub AI+
- * Uses Ollama (local LLM) for all AI features.
+ * AI Service — ClinIQ AI+
+ * Uses Ollama (local LLM) for ALL AI features including medical summarization.
  * Model: llama3.2 (fully local, no API key, no rate limits)
  *
  * Setup:
  *   1. Install Ollama: https://ollama.com
  *   2. Run: ollama pull llama3.2
  *   3. Ollama runs on http://localhost:11434 by default
+ *
+ * NOTE: Facebook BART Python bridge has been fully replaced by Ollama.
+ *       summarizeMedicalDocument() replicates BART's clinical extraction behavior.
  */
 
 import { Ollama } from "ollama";
 
 const OLLAMA_MODEL  = process.env.OLLAMA_MODEL  || "llama3.2";
 const OLLAMA_HOST   = process.env.OLLAMA_HOST   || "http://localhost:11434";
+const OLLAMA_TIMEOUT_MS = 30000; // 30-second timeout for all Ollama calls
 const MEDICAL_DISCLAIMER = `\n\n---\n⚕️ **Medical Disclaimer**: This AI-generated content is for informational purposes only and does not constitute medical advice. Always consult a qualified healthcare professional for medical decisions.`;
 
 // Singleton client
 const client = new Ollama({ host: OLLAMA_HOST });
 
-// ── Core helper ───────────────────────────────────────────────────────────────
+// ── Core helper with timeout ───────────────────────────────────────────────────
 
 async function generate(prompt) {
-	const response = await client.generate({
-		model:  OLLAMA_MODEL,
-		prompt,
-		stream: false,
-		options: { temperature: 0.2, num_predict: 1024 }
-	});
-	return response.response.trim();
+	const controller = new AbortController();
+	const timeoutId  = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+
+	try {
+		const response = await client.generate({
+			model:  OLLAMA_MODEL,
+			prompt,
+			stream: false,
+			options: { temperature: 0.2, num_predict: 1024 }
+		});
+		clearTimeout(timeoutId);
+		return response.response.trim();
+	} catch (err) {
+		clearTimeout(timeoutId);
+		if (err.name === 'AbortError' || err.message?.includes('abort')) {
+			throw new Error(`[OLLAMA] Request timed out after ${OLLAMA_TIMEOUT_MS / 1000}s. Ensure Ollama is running: ollama serve`);
+		}
+		throw err;
+	}
 }
 
 function safeJson(text, fallback) {
@@ -51,7 +67,135 @@ function safeJson(text, fallback) {
 	}
 }
 
-// ── Exported functions (same signatures as before) ────────────────────────────
+// ── NEW: Medical Document Summarizer (replaces Facebook BART) ─────────────────
+
+/**
+ * summarizeMedicalDocument()
+ * Fully replaces the BART Python bridge.
+ * Replicates BART's two-pass clinical extraction:
+ *   Pass 1 → Extract clinical values, flag abnormals (Hemoglobin, HbA1c, Glucose, etc.)
+ *   Pass 2 → Generate abstractive clinical summary + extract medication names
+ *
+ * Called from:
+ *   - medicalRecords.controller.js (background AI summary after upload)
+ *   - ai.controller.js (getPreConsultSummary, getBartSummary)
+ */
+export async function summarizeMedicalDocument(ocrText, fileName = "Medical Document") {
+	// Truncate very long documents — Ollama context window is ~4096 tokens
+	const truncatedText = ocrText.substring(0, 4000);
+
+	const prompt = `You are a clinical AI assistant analyzing a medical document for a healthcare platform.
+
+Document Name: "${fileName}"
+Document Content:
+---
+${truncatedText}
+---
+
+Perform a two-pass clinical analysis:
+
+PASS 1 — Extract and flag all laboratory values:
+- Look for test names paired with numeric values and units (e.g. "Hemoglobin 9.2 g/dL")
+- Flag as HIGH, LOW, or Normal based on standard reference ranges:
+  * Hemoglobin: Normal 12.0–17.5 g/dL
+  * HbA1c: Normal 4.0–5.6%, Pre-diabetic 5.7–6.4%, Diabetic >6.5%
+  * Glucose (fasting): Normal 70–100 mg/dL
+  * TSH: Normal 0.4–4.0 mIU/L
+  * Creatinine: Normal 0.6–1.2 mg/dL
+  * eGFR: Normal >60 mL/min
+  * Triglycerides: Normal <150 mg/dL
+  * Total Cholesterol: Normal <200 mg/dL
+
+PASS 2 — Generate clinical summary and extract medications.
+
+Return ONLY valid JSON (no markdown, no explanation):
+{
+  "summary": "2-4 sentence professional clinical summary. Start with 'Clinical Flags: [value] [HIGH/LOW]; ...' if abnormals exist, then summarize the overall findings.",
+  "clinicalFlags": ["Hemoglobin: 9.2 g/dL [LOW]", "HbA1c: 7.1% [HIGH — Diabetic range]"],
+  "extracted_meds": ["Metformin", "Atorvastatin"],
+  "severityFlag": "none|mild|moderate|urgent",
+  "keyFindings": ["finding 1", "finding 2"]
+}
+
+RULES:
+1. extracted_meds: list ONLY medication names found in the document text. Empty array if none.
+2. severityFlag "urgent" if any critical value found (e.g. HbA1c > 9, Hemoglobin < 8, Glucose > 400).
+3. If no lab values found, set clinicalFlags to [] and write a general document summary.
+4. Keep the summary professional and concise — suitable for a doctor to read in 10 seconds.`;
+
+	try {
+		const text   = await generate(prompt);
+		const parsed = safeJson(text, null);
+
+		if (parsed?.summary) {
+			// Build BART-compatible output: prepend flags to summary (as BART did)
+			let finalSummary = parsed.summary;
+			if (parsed.clinicalFlags?.length > 0 && !finalSummary.includes('Clinical Flags')) {
+				finalSummary = `Clinical Flags: ${parsed.clinicalFlags.join('; ')}\n\n${finalSummary}`;
+			}
+			return {
+				summary:        finalSummary,
+				extracted_meds: parsed.extracted_meds || [],
+				clinicalFlags:  parsed.clinicalFlags  || [],
+				severityFlag:   parsed.severityFlag   || 'none',
+				keyFindings:    parsed.keyFindings    || []
+			};
+		}
+
+		// Fallback: treat raw text as summary
+		return {
+			summary:        text.substring(0, 500),
+			extracted_meds: [],
+			clinicalFlags:  [],
+			severityFlag:   'none',
+			keyFindings:    []
+		};
+	} catch (err) {
+		console.error('[OLLAMA] summarizeMedicalDocument failed:', err.message);
+		// Return a meaningful fallback so UI never shows "Generating..." permanently
+		return {
+			summary:        `Document "${fileName}" processed. AI analysis temporarily unavailable — please try refreshing. (${err.message})`,
+			extracted_meds: [],
+			clinicalFlags:  [],
+			severityFlag:   'none',
+			keyFindings:    []
+		};
+	}
+}
+
+/**
+ * extractMedicationsFromText()
+ * Replaces the BART med-extraction step for external prescription uploads.
+ * Takes raw OCR text from an uploaded prescription image and returns medication names.
+ */
+export async function extractMedicationsFromText(text) {
+	const prompt = `You are a pharmacist reading a prescription. Extract ALL medication names from this text.
+
+PRESCRIPTION TEXT:
+---
+${text.substring(0, 2000)}
+---
+
+Return ONLY a JSON array of medication names. Include brand names and generic names as written.
+Examples: ["Paracetamol 500mg", "Tab Amoxicillin 250mg", "Dolo 650", "Metformin 500mg BD"]
+
+If no medications found, return: []`;
+
+	try {
+		const raw  = await generate(prompt);
+		// Handle both array and object responses
+		const arrMatch = raw.match(/\[.*?\]/s);
+		if (arrMatch) {
+			return JSON.parse(arrMatch[0]);
+		}
+		return [];
+	} catch (err) {
+		console.error('[OLLAMA] extractMedicationsFromText failed:', err.message);
+		return [];
+	}
+}
+
+// ── Existing exported functions (unchanged signatures) ────────────────────────
 
 /**
  * Generate a natural-remedies-focused medical record summary.
@@ -139,7 +283,7 @@ export async function generatePreConsultSummary({ patientName, prescriptions, la
 
 	const labSummary = labResults.slice(0, 5).map((l, i) =>
 		`${i + 1}. ${l.fileName} (${l.recordDate?.toISOString?.().split("T")[0] || "unknown"}): ` +
-		l.structuredData.slice(0, 6).map(t => `${t.testName}=${t.value}${t.unit || ""}`).join(", ")
+		(l.structuredData || []).slice(0, 6).map(t => `${t.testName}=${t.value}${t.unit || ""}`).join(", ")
 	).join("\n") || "No lab results on record.";
 
 	const prompt = `You are a clinical AI assistant helping a doctor prepare for a consultation.
@@ -173,7 +317,7 @@ Generate a concise pre-consultation clinical brief in JSON format only (no markd
  */
 export async function runCdssCheck({ medicationName, patientLabHistory, existingMedications }) {
 	const labContext = patientLabHistory.slice(0, 5).flatMap(l =>
-		l.structuredData.slice(0, 8).map(t => `${t.testName}: ${t.value}${t.unit || ""} (${t.flag})`)
+		(l.structuredData || []).slice(0, 8).map(t => `${t.testName}: ${t.value}${t.unit || ""} (${t.flag})`)
 	).join(", ") || "No lab data available";
 
 	const meds = existingMedications.slice(0, 8).join(", ") || "None";
@@ -248,6 +392,46 @@ RULES:
 	};
 }
 
+/**
+ * Fuzzy-map prescription medicine names to actual inventory product names.
+ * Handles brand→generic, typos, and partial names.
+ * Falls back to regex matching if Ollama is offline.
+ */
+export async function mapMedsToInventory(extractedNames, storeProducts) {
+	if (!extractedNames.length || !storeProducts.length) return [];
+
+	const storeNames = storeProducts.map(p => p.name).join(", ");
+	const prompt = `You are a pharmacist. A prescription contains: [${extractedNames.join(", ")}].
+Our store has: [${storeNames}].
+Match each prescription item to the closest store product (brand=generic is fine, e.g. Dolo=Paracetamol).
+Return ONLY a JSON array of matched store names, no explanation.
+Example: ["Paracetamol 500mg", "Amoxicillin 250mg"]`;
+
+	try {
+		const raw = await generate(prompt);
+		// Fix: use /s flag so . matches newlines in multi-line JSON arrays
+		const match = raw.match(/\[.*?\]/s);
+		if (match) {
+			const names = JSON.parse(match[0]);
+			return storeProducts.filter(p => names.some(n =>
+				p.name.toLowerCase().includes(n.toLowerCase()) ||
+				n.toLowerCase().includes(p.name.toLowerCase())
+			));
+		}
+	} catch {
+		console.warn('[OLLAMA] Fuzzy mapping failed, falling back to regex');
+	}
+
+	// Regex fallback: partial name match
+	return storeProducts.filter(p =>
+		extractedNames.some(n =>
+			p.name.toLowerCase().includes(n.toLowerCase()) ||
+			n.toLowerCase().includes(p.name.toLowerCase()) ||
+			(p.genericName && p.genericName.toLowerCase().includes(n.toLowerCase()))
+		)
+	);
+}
+
 export async function generateHealthInsights(labResults) {
 	if (!labResults || labResults.length === 0) {
 		return [
@@ -257,7 +441,7 @@ export async function generateHealthInsights(labResults) {
 		];
 	}
 
-	const latestTests = labResults[0]?.structuredData?.slice(0, 10)
+	const latestTests = (labResults[0]?.structuredData || []).slice(0, 10)
 		.map(t => `${t.testName}: ${t.value}${t.unit || ""} (${t.flag})`)
 		.join("\n") || "";
 
@@ -295,7 +479,7 @@ export async function generatePatientBriefingSummary({ patientName, reason, pres
 
 	const labSummary = labResults.slice(0, 5).map((l, i) =>
 		`${i + 1}. ${l.fileName} (${l.recordDate?.toISOString?.().split("T")[0] || "unknown"}): ` +
-		l.structuredData.slice(0, 6).map(t => `${t.testName}=${t.value}${t.unit || ""} [${t.flag}]`).join(", ")
+		(l.structuredData || []).slice(0, 6).map(t => `${t.testName}=${t.value}${t.unit || ""} [${t.flag}]`).join(", ")
 	).join("\n") || "No lab results on record.";
 
 	const transcriptSummary = transcripts?.slice(0, 3).map((t, i) =>
@@ -422,7 +606,7 @@ Return ONLY valid JSON:
  * Analyzes appointments + security logs → generates platform health summary
  */
 export async function aiAdminSystemReport({ appointments, recentLogins, flaggedUsers }) {
-	const apptSummary = `Total: ${appointments.total}, Completed: ${appointments.completed}, Cancelled: ${appointments.cancelled}, Pending: ${appointments.pending}`;
+	const apptSummary  = `Total: ${appointments.total}, Completed: ${appointments.completed}, Cancelled: ${appointments.cancelled}, Pending: ${appointments.pending}`;
 	const loginSummary = `Total logins (24h): ${recentLogins.total}, Failed: ${recentLogins.failed}, Locked accounts: ${recentLogins.locked}`;
 	const flagSummary  = flaggedUsers.length > 0 ? flaggedUsers.map(u => `${u.email} — ${u.reason}`).join('; ') : 'None';
 

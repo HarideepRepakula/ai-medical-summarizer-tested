@@ -33,6 +33,11 @@ export async function askChatbot(req, res) {
 			PrescriptionModel.find({ patientId, status: "active" }).sort({ createdAt: -1 }).limit(3).lean()
 		]);
 
+		// Also fetch medical records with AI summaries
+		const { MedicalRecordModel } = await import('../models/MedicalRecord.js');
+		const medicalRecords = await MedicalRecordModel.find({ patientId })
+			.sort({ uploadedAt: -1 }).limit(5).lean();
+
 		let context = "";
 
 		if (transcripts.length > 0) {
@@ -47,7 +52,7 @@ export async function askChatbot(req, res) {
 			context += "=== RECENT LAB RESULTS ===\n";
 			labResults.forEach((lr, i) => {
 				context += `--- Report ${i + 1}: ${lr.fileName} (${lr.recordDate?.toISOString().split("T")[0]}) ---\n`;
-				lr.structuredData.slice(0, 10).forEach(t =>
+				(lr.structuredData || []).slice(0, 10).forEach(t =>
 					context += `  ${t.testName}: ${t.value}${t.unit || ""} [${t.flag}]\n`
 				);
 				context += "\n";
@@ -66,6 +71,26 @@ export async function askChatbot(req, res) {
 		}
 
 		if (!context) context = "No history available.";
+
+		// Medical records with BART summaries
+		if (medicalRecords.length > 0) {
+			context += "=== UPLOADED MEDICAL RECORDS ===\n";
+			medicalRecords.forEach(r => {
+				context += `--- ${r.recordName} (${r.fileType}, uploaded ${r.uploadedAt?.toISOString().split('T')[0]}) ---\n`;
+				if (r.aiSummary) context += `AI Summary: ${r.aiSummary.substring(0, 400)}\n`;
+				context += '\n';
+			});
+		}
+
+		// Include latest BART summary from most recent appointment
+		try {
+			const latestApt = await AppointmentModel.findOne({ patientId })
+				.sort({ createdAt: -1 }).lean();
+			if (latestApt?.aiPreparedSummary?.content) {
+				context += "=== BART AI CLINICAL SUMMARY ===\n";
+				context += latestApt.aiPreparedSummary.content.substring(0, 800) + "\n\n";
+			}
+		} catch {}
 
 		// ── Generate Response ───────────────────────────────────────────────────────────────────
 		const response = await generateChatbotResponse({ userMessage: message, context });
@@ -229,7 +254,7 @@ export async function askConsultationChatbot(req, res) {
 			context += "=== PATIENT LAB HISTORY ===\n";
 			labResults.forEach(lr => {
 				context += `--- ${lr.fileName} (${lr.recordDate?.toISOString().split("T")[0]}) ---\n`;
-				lr.structuredData.slice(0, 6).forEach(t =>
+				(lr.structuredData || []).slice(0, 6).forEach(t =>
 					context += `  ${t.testName}: ${t.value}${t.unit || ""} [${t.flag}]\n`
 				);
 			});

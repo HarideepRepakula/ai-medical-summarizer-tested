@@ -6,7 +6,6 @@ import authService from '../services/authService.js';
 const ROLES = [
 	{ value: 'PATIENT',  label: 'Patient',  icon: '🩺', desc: 'Book appointments & track health' },
 	{ value: 'DOCTOR',   label: 'Doctor',   icon: '👨‍⚕️', desc: 'Manage patients & consultations' },
-	{ value: 'ADMIN',    label: 'Admin',    icon: '🛡️', desc: 'System administration' },
 	{ value: 'PHARMACY', label: 'Pharmacy', icon: '💊', desc: 'Manage orders & inventory' },
 ];
 
@@ -68,7 +67,7 @@ export default function Signup() {
 				if (form.licenseFile) fd.append('licenseFile', form.licenseFile);
 			}
 
-			const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+			const API_BASE = import.meta.env.VITE_API_URL || '/api';
 			const response = await fetch(`${API_BASE}/auth/signup`, {
 				method:      'POST',
 				body:        fd,
@@ -83,7 +82,7 @@ export default function Signup() {
 
 			if (data.accessToken) authService.setAccessToken(data.accessToken);
 
-			const routes = { PATIENT: '/patient', DOCTOR: '/doctor', ADMIN: '/admin', PHARMACY: '/pharmacy' };
+			const routes = { PATIENT: '/patient', DOCTOR: '/doctor', PHARMACY: '/pharmacy' };
 			navigate(routes[form.role] || '/patient');
 
 		} catch (err) {

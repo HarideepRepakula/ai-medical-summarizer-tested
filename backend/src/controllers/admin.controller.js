@@ -8,7 +8,7 @@ import { AppointmentModel } from "../models/Appointment.js";
 import { UserModel }        from "../models/User.js";
 import { DoctorModel }      from "../models/Doctor.js";
 import { aiAdminSystemReport, aiAdminVerifyDoctor, aiAdminModerateRecord } from "../services/ollamaService.js";
-import Tesseract from "tesseract.js";
+import { extractTextFromFile } from "../utils/fileExtraction.js";
 
 // ─── System Health Report ─────────────────────────────────────────────────────
 
@@ -134,7 +134,7 @@ export async function reVerifyDoctor(req, res) {
 		}
 
 		console.log(`[AI-ADMIN] Re-verifying doctor ${doctorId}`);
-		const { data: { text } } = await Tesseract.recognize(req.file.path, 'eng');
+		const text = await extractTextFromFile(req.file.path, req.file.mimetype);
 
 		const aiDecision = await aiAdminVerifyDoctor(
 			{ name: doctor.userId.name, specialty: doctor.specialty, licenseNumber: doctor.licenseNumber },
@@ -243,7 +243,7 @@ export async function moderateRecord(req, res) {
 
 		const recordName = req.body.recordName || 'Unknown Record';
 
-		const { data: { text } } = await Tesseract.recognize(req.file.path, 'eng');
+		const text = await extractTextFromFile(req.file.path, req.file.mimetype);
 		const result = await aiAdminModerateRecord(recordName, text);
 
 		console.log(`[AI-ADMIN] Moderation: "${recordName}" → flagged=${result.flagged}`);

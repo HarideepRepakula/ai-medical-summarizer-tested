@@ -1,6 +1,9 @@
 /**
- * AI Controller — MedHub AI+
+ * AI Controller — ClinIQ AI+
  * Pre-consultation summary, AI Scribe (transcript save), CDSS check.
+ *
+ * NOTE: Facebook BART Python bridge has been fully removed.
+ *       All summarization now uses Ollama (summarizeMedicalDocument / generatePatientBriefingSummary).
  */
 
 import mongoose from "mongoose";
@@ -10,69 +13,105 @@ import { LabResultModel }    from "../models/LabResult.js";
 import { TranscriptModel }   from "../models/Transcript.js";
 import { UserModel }         from "../models/User.js";
 import {
-	generatePreConsultSummary,
 	runCdssCheck,
-	generateHealthInsights
+	generateHealthInsights,
+	summarizeMedicalDocument,
+	generatePatientBriefingSummary
 } from "../services/ollamaService.js";
 
 // ─── Pre-Consultation Summary ─────────────────────────────────────────────────
 
 /**
  * GET /api/ai/pre-consult-summary/:appointmentId
- * Doctor only. Returns an AI-generated brief about the patient.
- * Only available within 60 minutes of appointment start.
+ * Doctor only. Returns an AI-generated clinical brief about the patient.
+ * Uses Ollama generatePatientBriefingSummary() — replaces the old BART bridge.
  */
 export async function getPreConsultSummary(req, res) {
 	try {
 		const { appointmentId } = req.params;
 		const doctorId          = req.user.userId;
 
-		const appointment = await AppointmentModel.findById(appointmentId).lean();
+		const appointment = await AppointmentModel.findById(appointmentId)
+			.populate('patientId', 'name email')
+			.lean();
+
 		if (!appointment) {
 			return res.status(404).json({ success: false, error: "Appointment not found." });
 		}
-
-		// Only allow the appointment's doctor
 		if (appointment.doctorId.toString() !== doctorId) {
 			return res.status(403).json({ success: false, error: "Unauthorized." });
 		}
 
-		const patientId = appointment.patientId;
+		// Return cached summary if already generated
+		if (appointment.aiPreparedSummary?.content) {
+			return res.json({
+				success: true,
+				data: {
+					patientName:   appointment.patientId?.name || 'Unknown',
+					appointmentId,
+					summary:       appointment.aiPreparedSummary.content,
+					generatedAt:   appointment.aiPreparedSummary.generatedAt,
+					cached:        true
+				}
+			});
+		}
 
-		// Gather patient context
-		const [patient, prescriptions, labResults] = await Promise.all([
-			UserModel.findById(patientId).lean(),
+		const patientId = appointment.patientId._id || appointment.patientId;
+
+		const [prescriptions, labResults, transcripts] = await Promise.all([
 			PrescriptionModel.find({ patientId }).sort({ createdAt: -1 }).limit(5).lean(),
-			LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(5).lean()
+			LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(5).lean(),
+			TranscriptModel.find({ patientId }).sort({ createdAt: -1 }).limit(3).lean()
 		]);
 
+		const patient = await UserModel.findById(patientId).lean();
 		if (!patient) {
 			return res.status(404).json({ success: false, error: "Patient not found." });
 		}
 
-		const summary = await generatePreConsultSummary({
+		console.log('[AI] Generating pre-consult summary via Ollama...');
+		const briefing = await generatePatientBriefingSummary({
 			patientName:   patient.name,
+			reason:        appointment.reason,
 			prescriptions,
-			labResults
+			labResults,
+			transcripts
+		});
+		console.log('[AI] Pre-consult summary generated.');
+
+		const summaryContent = briefing.patientOverview || briefing.summary || 'Summary generated.';
+
+		// Cache to DB
+		await AppointmentModel.findByIdAndUpdate(appointmentId, {
+			$set: {
+				'aiPreparedSummary.content':     summaryContent,
+				'aiPreparedSummary.generatedAt': new Date(),
+				'aiPreparedSummary.isLocked':    false
+			}
 		});
 
 		res.json({
 			success: true,
 			data: {
-				patientName:   patient.name,
+				patientName:    patient.name,
 				appointmentId,
-				generatedAt:   new Date().toISOString(),
-				...summary
+				summary:        summaryContent,
+				riskLevel:      briefing.riskLevel,
+				conditions:     briefing.conditions     || [],
+				concerns:       briefing.concerns       || [],
+				labFindings:    briefing.labFindings    || [],
+				discussionPoints: briefing.discussionPoints || [],
+				generatedAt:    new Date().toISOString(),
+				cached:         false
 			}
 		});
 
 	} catch (error) {
 		console.error("Pre-consult summary error:", error.message);
-
-		if (error.message?.includes("OLLAMA") || error.message?.includes("connect")) {
-			return res.status(503).json({ success: false, error: "AI service unavailable. Ensure Ollama is running." });
-		}
-		res.status(500).json({ success: false, error: "Failed to generate pre-consultation summary." });
+		res.status(500).json({
+			success: false,
+			error: "AI summary failed. Ensure Ollama is running: ollama serve"
+		});
 	}
 }
 
@@ -144,10 +183,8 @@ export async function saveTranscript(req, res) {
 /**
  * POST /api/ai/cdss-check
  * Runs a clinical decision support check for a medication.
- *
- * First queries OpenFDA for official drug warnings, then uses Gemini
+ * First queries OpenFDA for official drug warnings, then uses Ollama
  * to correlate with patient's lab history.
- *
  * Body: { medicationName, patientId }
  */
 export async function cdssCheck(req, res) {
@@ -187,7 +224,9 @@ export async function cdssCheck(req, res) {
 			])
 			: [[], []];
 
-		const existingMedications = prescriptions.flatMap(p => p.medicines.map(m => `${m.name} ${m.dosage}`));
+		const existingMedications = prescriptions.flatMap(p =>
+			p.medicines.map(m => `${m.name} ${m.dosage}`)
+		);
 
 		// ── Step 3: Ollama clinical reasoning (with graceful fallback) ────────
 		let cdssResult;
@@ -200,15 +239,15 @@ export async function cdssCheck(req, res) {
 		} catch (aiErr) {
 			console.warn("[CDSS] Ollama unavailable, using FDA-only fallback:", aiErr.message);
 			cdssResult = {
-				riskLevel:        fdaWarnings.length > 0 ? "caution" : "safe",
-				interactions:     [],
-				contraindications:[],
-				labConcerns:      [],
-				recommendation:   fdaWarnings.length > 0
+				riskLevel:         fdaWarnings.length > 0 ? "caution" : "safe",
+				interactions:      [],
+				contraindications: [],
+				labConcerns:       [],
+				recommendation:    fdaWarnings.length > 0
 					? `FDA data found for ${medicationName}. Review warnings below before prescribing.`
 					: `No FDA warnings found for "${medicationName}". Verify the drug name and consult clinical references.`,
 				requiresAttention: fdaWarnings.length > 0,
-				aiNote:           "⚠️ AI analysis unavailable (Ollama offline). Showing FDA data only."
+				aiNote:            "⚠️ AI analysis unavailable (Ollama offline). Showing FDA data only."
 			};
 		}
 
@@ -249,9 +288,9 @@ export async function getHealthInsights(req, res) {
 			success: true,
 			data: {
 				insights,
-				basedOn:  labResults[0]?.fileName || "general health data",
+				basedOn:     labResults[0]?.fileName || "general health data",
 				generatedAt: new Date().toISOString(),
-				disclaimer: "⚕️ These insights are AI-generated and for informational purposes only. Consult your doctor for medical advice."
+				disclaimer:  "⚕️ These insights are AI-generated and for informational purposes only. Consult your doctor for medical advice."
 			}
 		});
 
@@ -271,3 +310,40 @@ export async function getHealthInsights(req, res) {
 		});
 	}
 }
+
+// ─── Ollama Medical Summarizer (replaces /api/ai/bart-summary) ───────────────
+
+/**
+ * POST /api/ai/summarize
+ * Runs Ollama medical summarization (replaces old BART endpoint).
+ * Body: { text, fileName? }
+ *
+ * Also kept as /api/ai/bart-summary for backward compatibility with any
+ * frontend code that still calls the old endpoint name.
+ */
+export async function getMedicalSummary(req, res) {
+	const { text, fileName = 'Medical Document' } = req.body;
+	if (!text?.trim()) {
+		return res.status(400).json({ success: false, error: "text is required." });
+	}
+	try {
+		const result = await summarizeMedicalDocument(text, fileName);
+		res.json({
+			success:       true,
+			summary:       result.summary,
+			extractedMeds: result.extracted_meds || [],
+			clinicalFlags: result.clinicalFlags  || [],
+			severityFlag:  result.severityFlag   || 'none',
+			engine:        'ollama'
+		});
+	} catch (err) {
+		console.error("[AI] getMedicalSummary error:", err.message);
+		res.status(500).json({
+			success: false,
+			error:   "AI summarizer failed. Ensure Ollama is running: ollama serve"
+		});
+	}
+}
+
+// Backward-compatible alias for old BART endpoint
+export const getBartSummary = getMedicalSummary;

@@ -2,8 +2,8 @@ import { authService } from "../services/authService.js";
 import { UserModel } from "../models/User.js";
 import { RefreshTokenModel } from "../models/RefreshToken.js";
 import { USER_ROLES } from "../types/roles.js";
-import Tesseract from "tesseract.js";
 import { aiAdminVerifyDoctor } from "../services/ollamaService.js";
+import { extractTextFromFile } from "../utils/fileExtraction.js";
 
 function getClientInfo(req) {
 	return {
@@ -46,8 +46,8 @@ export async function signup(req, res) {
 			// Run AI Admin verification if license file was uploaded
 			if (req.file) {
 				try {
-					console.log(`[AI-ADMIN] Running OCR + credential check for doctor ${user._id}`);
-					const { data: { text } } = await Tesseract.recognize(req.file.path, 'eng');
+					console.log(`[AI-ADMIN] Running text extraction + credential check for doctor ${user._id}`);
+					const text = await extractTextFromFile(req.file.path, req.file.mimetype);
 					const aiDecision = await aiAdminVerifyDoctor(
 						{ name, specialty, licenseNumber: req.body.licenseNumber },
 						text

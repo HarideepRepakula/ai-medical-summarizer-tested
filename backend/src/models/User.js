@@ -17,7 +17,7 @@ const UserSchema = new Schema(
 		},
 		email: { type: String, required: false, unique: true, sparse: true },
 		passwordHash: { type: String, required: true },
-		role: { type: String, enum: ["DOCTOR", "PATIENT", "ADMIN", "PHARMACY"], required: true },
+		role: { type: String, enum: ["DOCTOR", "PATIENT", "PHARMACY"], required: true },
 		// Security enhancements
 		passwordChangedAt: { type: Date, default: Date.now },
 		lastLoginAt: { type: Date },

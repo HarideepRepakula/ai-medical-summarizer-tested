@@ -205,6 +205,96 @@ function PatientQueriesTab({ appointmentId }) {
 	);
 }
 
+// ── Online Prescription Form ─────────────────────────────────────────────────
+function OnlinePrescriptionForm({ appointmentId, patientId }) {
+	const [meds, setMeds] = useState([{ name: '', dosage: '', frequency: '' }]);
+	const [saving, setSaving] = useState(false);
+	const [saved, setSaved] = useState(false);
+
+	function updateMed(i, field, value) {
+		setMeds(prev => prev.map((m, idx) => idx === i ? { ...m, [field]: value } : m));
+	}
+
+	function addMed() {
+		setMeds(prev => [...prev, { name: '', dosage: '', frequency: '' }]);
+	}
+
+	function removeMed(i) {
+		if (meds.length > 1) setMeds(prev => prev.filter((_, idx) => idx !== i));
+	}
+
+	async function handleSave() {
+		const validMeds = meds.filter(m => m.name.trim());
+		if (!validMeds.length) return;
+		setSaving(true);
+		try {
+			await apiService.createPrescription({ appointmentId, patientId, medicines: validMeds });
+			setSaved(true);
+			setMeds([{ name: '', dosage: '', frequency: '' }]);
+			setTimeout(() => setSaved(false), 4000);
+		} catch (e) {
+			console.error('Prescription save failed:', e.message);
+		} finally {
+			setSaving(false);
+		}
+	}
+
+	return (
+		<div className="card mt-4">
+			<div className="flex items-center gap-2 mb-3">
+				<span className="text-lg">📝</span>
+				<h3 className="font-semibold text-text-primary text-sm">Write Prescription</h3>
+				<span className="badge-ai text-[10px]">Auto-Cart</span>
+			</div>
+
+			{saved && (
+				<div className="mb-3 bg-success-50 border border-success-200 text-success-700 rounded-clinical px-3 py-2 text-xs">
+					✅ Prescription saved and sent to Pharmacy auto-cart!
+				</div>
+			)}
+
+			<div className="space-y-2">
+				{meds.map((m, i) => (
+					<div key={i} className="flex gap-2 items-center">
+						<input
+							placeholder="Medicine name"
+							value={m.name}
+							onChange={e => updateMed(i, 'name', e.target.value)}
+							className="input text-xs flex-1"
+						/>
+						<input
+							placeholder="Dosage"
+							value={m.dosage}
+							onChange={e => updateMed(i, 'dosage', e.target.value)}
+							className="input text-xs w-20"
+						/>
+						<input
+							placeholder="Frequency"
+							value={m.frequency}
+							onChange={e => updateMed(i, 'frequency', e.target.value)}
+							className="input text-xs w-24"
+						/>
+						{meds.length > 1 && (
+							<button onClick={() => removeMed(i)} className="text-danger-400 hover:text-danger-600 text-xs px-1">✕</button>
+						)}
+					</div>
+				))}
+			</div>
+
+			<div className="flex items-center gap-3 mt-3">
+				<button onClick={addMed} className="text-xs text-primary-600 hover:text-primary-700 font-medium">+ Add Medicine</button>
+				<button
+					onClick={handleSave}
+					disabled={saving || !meds.some(m => m.name.trim())}
+					className="btn-primary btn-sm text-xs ml-auto"
+				>
+					{saving ? '⏳ Saving...' : '✅ Submit & Auto-Cart'}
+				</button>
+			</div>
+		</div>
+	);
+}
+
 // ── Main Doctor Consultation View ─────────────────────────────────────────────
 export default function DoctorConsultationView({ appointment, onBack }) {
 	const [activeTab, setActiveTab]         = useState('reports');
@@ -272,6 +362,10 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 	const patientName = typeof appointment.patient === 'object'
 		? appointment.patient.name
 		: appointment.patient;
+
+	const patientId = typeof appointment.patient === 'object'
+		? appointment.patient.id
+		: null;
 
 	async function startRecording() {
 		try {
@@ -587,6 +681,11 @@ export default function DoctorConsultationView({ appointment, onBack }) {
 										✅ Transcript saved ({Math.floor(scribeDuration / 60)}m {scribeDuration % 60}s)
 									</div>
 								)}
+								{/* Online Prescription Form */}
+								<OnlinePrescriptionForm
+									appointmentId={appointment.id}
+									patientId={patientId}
+								/>
 							</div>
 						)}
 					</div>

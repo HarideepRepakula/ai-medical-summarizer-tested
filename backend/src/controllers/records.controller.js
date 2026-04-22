@@ -8,7 +8,7 @@
 
 import path from "path";
 import fs from "fs/promises";
-import { createWorker } from "tesseract.js";
+import { extractTextFromFile } from "../utils/fileExtraction.js";
 import { LabResultModel } from "../models/LabResult.js";
 import { parseLabReportOcr } from "../services/ollamaService.js";
 
@@ -32,15 +32,13 @@ export async function uploadLabRecord(req, res) {
 		// ── Step 1: OCR with Tesseract.js ────────────────────────────────────
 		console.log(`[RECORDS-${reqId}] Starting OCR...`);
 
-		const worker = await createWorker("eng");
 		let rawOcrText = "";
 
 		try {
-			const { data: { text } } = await worker.recognize(filePath);
-			rawOcrText = text.trim();
-			console.log(`[RECORDS-${reqId}] OCR complete. Chars: ${rawOcrText.length}`);
-		} finally {
-			await worker.terminate();
+			rawOcrText = await extractTextFromFile(filePath, mimetype);
+			console.log(`[RECORDS-${reqId}] Extraction complete. Chars: ${rawOcrText.length}`);
+		} catch (extractErr) {
+			console.error(`[RECORDS-${reqId}] Extraction failed:`, extractErr.message);
 		}
 
 		if (!rawOcrText || rawOcrText.length < 20) {

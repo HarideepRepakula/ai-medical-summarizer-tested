@@ -1,6 +1,6 @@
 import authService from './authService.js';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
 class ApiService {
 	// ── Core request method with automatic token refresh ──────────────────────
@@ -184,6 +184,23 @@ class ApiService {
 		return this.request('/ai/cdss-check', { method: 'POST', body: JSON.stringify(data) });
 	}
 	async getHealthInsights() { return this.request('/ai/health-insights'); }
+	async uploadExternalPrescription(formData) {
+		const url   = `${API_BASE_URL}/pharmacy/upload-prescription`;
+		const token = authService.getAccessToken();
+		const response = await fetch(url, {
+			method:      'POST',
+			headers:     token ? { Authorization: `Bearer ${token}` } : {},
+			credentials: 'include',
+			body:        formData
+		});
+		const data = await response.text();
+		if (!response.ok) {
+			let msg = `HTTP ${response.status}`;
+			try { msg = JSON.parse(data).error || msg; } catch {}
+			throw new Error(msg);
+		}
+		return data ? JSON.parse(data) : {};
+	}
 
 	// ── Pharmacy ──────────────────────────────────────────────────────────────
 	async getPharmacyProducts(category="") {

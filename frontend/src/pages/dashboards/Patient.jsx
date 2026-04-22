@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import jsPDF from 'jspdf';
 import AppLayout from '../../layouts/AppLayout.jsx';
 import UpcomingAppointments from '../../components/appointments/UpcomingAppointments.jsx';
 import RecentConsultations from '../../components/appointments/RecentConsultations.jsx';
@@ -44,6 +45,7 @@ export default function PatientDashboard() {
 	const [uploading, setUploading]           = useState(false);
 	const [uploadModal, setUploadModal]       = useState(false);
 	const [uploadForm, setUploadForm]         = useState({ recordName: '', type: 'Lab Report', file: null });
+	const [viewRecord, setViewRecord]         = useState(null);
 	const [bills, setBills]                   = useState([
 		{ id: 1, title: 'Consultation Fee', amount: 500,  status: 'paid',    date: '2025-01-20' },
 		{ id: 2, title: 'Pharmacy Order',   amount: 1250, status: 'pending', date: '2025-01-22' }
@@ -95,6 +97,38 @@ export default function PatientDashboard() {
 		} catch (err) {
 			showToast('Upload failed: ' + err.message, 'error');
 		} finally { setUploading(false); }
+	};
+
+	const downloadAiReport = (record) => {
+		const doc = new jsPDF();
+		doc.setFillColor(40, 116, 240);
+		doc.rect(0, 0, 210, 40, 'F');
+		doc.setTextColor(255, 255, 255);
+		doc.setFontSize(22);
+		doc.text('ClinIQ AI Medical Report', 20, 28);
+		doc.setTextColor(0, 0, 0);
+		doc.setFontSize(10);
+		doc.setFont('helvetica', 'bold');
+		doc.text('REPORT INFORMATION', 20, 55);
+		doc.setFont('helvetica', 'normal');
+		doc.text(`File Name: ${record.recordName}`, 20, 65);
+		doc.text(`Category: ${record.fileType}`, 20, 72);
+		doc.text(`Analysis Date: ${new Date().toLocaleDateString()}`, 20, 79);
+		doc.setDrawColor(200, 200, 200);
+		doc.line(20, 85, 190, 85);
+		doc.setFont('helvetica', 'bold');
+		doc.setFontSize(12);
+		doc.text('Clinical Summary & Insights:', 20, 95);
+		doc.setFont('helvetica', 'normal');
+		doc.setFontSize(11);
+		doc.setTextColor(60, 60, 60);
+		const splitText = doc.splitTextToSize(record.aiSummary || 'No summary available.', 170);
+		doc.text(splitText, 20, 105);
+		doc.setFontSize(8);
+		doc.setTextColor(150, 150, 150);
+		doc.text('Disclaimer: This is an AI-generated summary by the ClinIQ BART-Large engine.', 20, 280);
+		doc.text('Please consult a licensed physician for final medical diagnosis.', 20, 285);
+		doc.save(`ClinIQ_Report_${record.recordName.replace(/\s+/g, '_')}.pdf`);
 	};
 
 	const handleDeleteRecord = async (id) => {
@@ -284,10 +318,10 @@ export default function PatientDashboard() {
 					{/* KPI Cards */}
 					<div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
 						{[
-							{ label: 'Appointments', value: appointments.length, icon: '📝“…', color: 'text-primary-600', bg: 'bg-primary-50' },
-							{ label: 'Medical Records', value: labResults.length, icon: '📝“‹', color: 'text-success-600', bg: 'bg-success-50' },
-							{ label: 'Pending Bills', value: `₹${bills.filter(b=>b.status==='pending').reduce((s,b)=>s+b.amount,0)}`, icon: '📝’³', color: 'text-amber-600', bg: 'bg-amber-50' },
-							{ label: 'AI Assistant', value: 'Active', icon: '📝§ ', color: 'text-ai-600', bg: 'bg-ai-50' },
+							{ label: 'Appointments', value: appointments.length, icon: '📅', color: 'text-primary-600', bg: 'bg-primary-50' },
+							{ label: 'Medical Records', value: labResults.length, icon: '📋', color: 'text-success-600', bg: 'bg-success-50' },
+							{ label: 'Pending Bills', value: `₹${bills.filter(b=>b.status==='pending').reduce((s,b)=>s+b.amount,0)}`, icon: '💳', color: 'text-amber-600', bg: 'bg-amber-50' },
+							{ label: 'AI Assistant', value: 'Active', icon: '🤖', color: 'text-ai-600', bg: 'bg-ai-50' },
 						].map((kpi, i) => (
 							<div key={i} className="card-stat">
 								<div className={`w-12 h-12 ${kpi.bg} rounded-clinical flex items-center justify-center text-xl shrink-0`}>
@@ -319,7 +353,7 @@ export default function PatientDashboard() {
 								</div>
 							)) : (
 								<div className="text-center py-8 text-text-secondary text-sm">
-									<span className="text-3xl block mb-2">📝“…</span>
+									<span className="text-3xl block mb-2">📅</span>
 									No appointments scheduled
 								</div>
 							)}
@@ -426,7 +460,7 @@ export default function PatientDashboard() {
 
 									{/* â”€â”€ Date â”€â”€ */}
 									<div>
-										<label className="block text-sm font-semibold text-text-primary mb-2">📝“… Preferred Date</label>
+										<label className="block text-sm font-semibold text-text-primary mb-2">📅 Preferred Date</label>
 										<input type="date" className="input w-full"
 											min={TODAY}
 											value={bookingForm.date}
@@ -495,7 +529,7 @@ export default function PatientDashboard() {
 											</div>
 										) : (
 											<label className="flex items-center justify-center gap-2 border-2 border-dashed border-gray-200 hover:border-primary-300 rounded-lg px-4 py-3 cursor-pointer transition-colors group">
-												<span className="text-xl text-gray-300 group-hover:text-primary-400 transition-colors">📝“„</span>
+												<span className="text-xl text-gray-300 group-hover:text-primary-400 transition-colors">🔄</span>
 												<span className="text-sm text-text-secondary group-hover:text-primary-600">Click to upload reports, lab results, or prescriptions</span>
 												<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
 													onChange={e => {
@@ -587,7 +621,7 @@ export default function PatientDashboard() {
 				<div className="space-y-6 animate-fade-in">
 					<div className="section-header">
 						<h1 className="text-2xl font-bold">Medical Records</h1>
-						<button className="btn-primary btn-sm" onClick={() => setUploadModal(true)}>📝“¤ Upload Record</button>
+						<button className="btn-primary btn-sm" onClick={() => setUploadModal(true)}>📤 Upload Record</button>
 					</div>
 
 					{/* Records Table */}
@@ -598,7 +632,7 @@ export default function PatientDashboard() {
 							</div>
 						) : medicalRecords.length === 0 ? (
 							<div className="text-center py-12 text-text-secondary text-sm">
-								<span className="text-4xl block mb-3">📝“‹</span>
+								<span className="text-4xl block mb-3">📋</span>
 								No records uploaded yet.
 								<button onClick={() => setUploadModal(true)} className="block mx-auto mt-3 btn-primary btn-sm">Upload your first record</button>
 							</div>
@@ -620,7 +654,10 @@ export default function PatientDashboard() {
 												) : <span className="italic text-[10px]">Generating...</span>}
 											</td>
 											<td className="space-x-2">
-												<a href={rec.fileUrl} target="_blank" rel="noreferrer" className="btn-ghost btn-sm text-xs">View</a>
+												<button onClick={() => setViewRecord(rec)} className="btn-ghost btn-sm text-xs">View</button>
+												{rec.aiSummary && (
+													<button onClick={() => downloadAiReport(rec)} className="btn-ghost btn-sm text-xs text-sky-600">📥 PDF</button>
+												)}
 												<button onClick={() => handleDeleteRecord(rec.id)} className="btn-ghost btn-sm text-xs text-danger-500">Delete</button>
 											</td>
 										</tr>
@@ -630,12 +667,40 @@ export default function PatientDashboard() {
 						)}
 					</div>
 
+					{/* View Record Modal */}
+					{viewRecord && (
+						<div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setViewRecord(null)}>
+							<div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+								<div className="p-4 border-b flex justify-between items-center bg-gray-50">
+									<h3 className="font-bold text-lg">{viewRecord.recordName}</h3>
+									<button onClick={() => setViewRecord(null)} className="w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 flex items-center justify-center text-text-secondary">✕</button>
+								</div>
+								<div className="flex-1 overflow-y-auto p-6 grid md:grid-cols-2 gap-6">
+									<div className="border rounded-xl overflow-hidden bg-gray-100 min-h-[400px]">
+										<iframe src={viewRecord.fileUrl} className="w-full h-full min-h-[400px]" title="document" />
+									</div>
+									<div className="space-y-4">
+										<div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+											<h4 className="font-bold text-blue-800 mb-2">🧠 Full AI Clinical Summary</h4>
+											<p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+												{viewRecord.aiSummary || 'No AI summary available for this record.'}
+											</p>
+										</div>
+										<div className="text-[10px] text-gray-400 italic">
+											Generated by ClinIQ BART-Large Engine · {new Date(viewRecord.uploadedAt).toLocaleDateString()}
+										</div>
+									</div>
+								</div>
+							</div>
+						</div>
+					)}
+
 					{/* Upload Modal */}
 					{uploadModal && (
 						<div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => setUploadModal(false)}>
 							<div className="bg-white rounded-2xl shadow-clinical-lg w-full max-w-md p-6 animate-slide-up" onClick={e => e.stopPropagation()}>
 								<div className="flex items-center justify-between mb-5">
-									<h2 className="text-lg font-bold text-text-primary">📝“¤ Upload Medical Record</h2>
+									<h2 className="text-lg font-bold text-text-primary">📤 Upload Medical Record</h2>
 									<button onClick={() => setUploadModal(false)} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-text-secondary">✕</button>
 								</div>
 
@@ -671,7 +736,7 @@ export default function PatientDashboard() {
 											</div>
 										) : (
 											<label className="flex flex-col items-center justify-center gap-2 border-2 border-dashed border-gray-200 hover:border-primary-300 rounded-xl p-6 cursor-pointer transition-colors group">
-												<span className="text-3xl text-gray-300 group-hover:text-primary-400 transition-colors">📝“„</span>
+												<span className="text-3xl text-gray-300 group-hover:text-primary-400 transition-colors">🔄</span>
 												<span className="text-sm text-text-secondary group-hover:text-primary-600">Click to browse</span>
 												<span className="text-xs text-text-secondary">PDF, JPG, PNG –” max 5MB</span>
 												<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png"

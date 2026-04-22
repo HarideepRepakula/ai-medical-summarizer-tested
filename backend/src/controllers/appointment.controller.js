@@ -4,6 +4,11 @@ import { DoctorModel } from "../models/Doctor.js";
 import { UserModel } from "../models/User.js";
 import { MedicalRecordModel } from "../models/MedicalRecord.js";
 import { v4 as uuidv4 } from 'uuid';
+import { notifyPreConsultReminder } from "../services/notificationService.js";
+import {
+	generatePatientBriefingSummary
+} from "../services/ollamaService.js";
+// NOTE: BART Python bridge removed. All AI summarization now uses Ollama.
 import {
 	notifyBookingConfirmed,
 	notifyDoctorReschedule,
@@ -145,6 +150,11 @@ export async function bookAppointment(req, res) {
 
 	} catch (error) {
 		console.error('Book appointment error:', error);
+
+		// MongoDB unique index violation — slot already taken
+		if (error.code === 11000) {
+			return res.status(409).json({ success: false, error: 'This time slot is already booked. Please choose a different time.' });
+		}
 
 		const errorMessages = {
 			'DOCTOR_NOT_FOUND':                      'Doctor not found',
@@ -672,10 +682,14 @@ export async function getDoctorAvailability(req, res) {
 			return res.status(400).json({ success: false, error: 'Doctor ID and date are required' });
 		}
 
-		const queryDate   = new Date(date);
+		// Bug fix: use $gte/$lt range so the date match works regardless of UTC time component
+		const queryDate = new Date(date);
+		const dayStart  = new Date(queryDate); dayStart.setUTCHours(0, 0, 0, 0);
+		const dayEnd    = new Date(queryDate); dayEnd.setUTCHours(23, 59, 59, 999);
+
 		const bookedSlots = await AppointmentModel.find({
 			doctorId,
-			appointmentDate: queryDate,
+			appointmentDate: { $gte: dayStart, $lte: dayEnd },
 			status: { $in: ['pending', 'confirmed', 'in_progress'] }
 		}).select('startTime endTime').lean();
 
@@ -750,84 +764,111 @@ export async function getAiSummary(req, res) {
 			return res.status(404).json({ success: false, error: 'Appointment not found' });
 		}
 
-		// Auth: must be patient or doctor
 		const aptPatientId = appointment.patientId._id?.toString() ?? appointment.patientId.toString();
 		const aptDoctorId  = appointment.doctorId?.toString();
 		if (aptPatientId !== userId && aptDoctorId !== userId) {
 			return res.status(403).json({ success: false, error: 'Unauthorized' });
 		}
 
-		// If summary already exists, return it
+		// Return cached summary if available
 		if (appointment.aiPreparedSummary?.content) {
 			return res.json({
 				success: true,
 				data: {
-					summary: appointment.aiPreparedSummary.content,
-					editablePoints: appointment.aiPreparedSummary.editablePoints || [],
-					isLocked: appointment.aiPreparedSummary.isLocked || false,
+					summary:         appointment.aiPreparedSummary.content,
+					editablePoints:  appointment.aiPreparedSummary.editablePoints || [],
+					isLocked:        appointment.aiPreparedSummary.isLocked || false,
 					sharedWithDoctor: appointment.aiPreparedSummary.sharedWithDoctor || false,
-					generatedAt: appointment.aiPreparedSummary.generatedAt
+					generatedAt:     appointment.aiPreparedSummary.generatedAt
 				}
 			});
 		}
 
-		// Generate new summary using Gemini
-		const { generatePatientBriefingSummary } = await import('../services/ollamaService.js');
+		// Fetch patient context from MongoDB
 		const { PrescriptionModel } = await import('../models/Prescription.js');
-		const { LabResultModel } = await import('../models/LabResult.js');
-		const { TranscriptModel } = await import('../models/Transcript.js');
+		const { LabResultModel }    = await import('../models/LabResult.js');
+		const { TranscriptModel }   = await import('../models/Transcript.js');
 
 		const patientId = appointment.patientId._id;
-
 		const [prescriptions, labResults, transcripts] = await Promise.all([
 			PrescriptionModel.find({ patientId }).sort({ createdAt: -1 }).limit(5).lean(),
 			LabResultModel.find({ patientId }).sort({ recordDate: -1 }).limit(5).lean(),
 			TranscriptModel.find({ patientId }).sort({ createdAt: -1 }).limit(3).lean()
 		]);
 
-		const summaryResult = await generatePatientBriefingSummary({
+		console.log('[AI] Generating AI summary via Ollama (replaces BART)...');
+		const briefing = await generatePatientBriefingSummary({
 			patientName: appointment.patientId.name,
-			reason: appointment.reason,
+			reason:      appointment.reason,
 			prescriptions,
 			labResults,
 			transcripts
 		});
+		console.log('[AI] Summary generation complete.');
 
-		// Store summary in appointment
-		await AppointmentModel.findByIdAndUpdate(id, {
-			$set: {
-				'aiPreparedSummary.content': summaryResult.summary || '',
-				'aiPreparedSummary.editablePoints': summaryResult.keyPoints || [],
-				'aiPreparedSummary.generatedAt': new Date(),
-				'aiPreparedSummary.isLocked': false,
-				'aiPreparedSummary.sharedWithDoctor': false
+		const summaryContent  = briefing.patientOverview || briefing.summary || '';
+		const extractedMeds   = (briefing.prescriptions || []).map(p => p.name).filter(Boolean);
+		const medicineObjects = extractedMeds.map(name => ({ name, dosage: 'As directed', frequency: 'Check with doctor' }));
+
+		// Notify doctor that the AI brief is ready (fire-and-forget)
+		process.nextTick(async () => {
+			try {
+				const patient = await UserModel.findById(patientId).lean();
+				if (patient) {
+					await notifyPreConsultReminder(
+						appointment.doctorId,
+						patient,
+						{ _id: id, startTime: appointment.startTime }
+					);
+				}
+			} catch (e) {
+				console.warn('[NOTIFY] Pre-consult reminder failed:', e.message);
 			}
 		});
+
+		// Cache summary + auto-populate medicines in MongoDB
+		const updatePayload = {
+			$set: {
+				'aiPreparedSummary.content':          summaryContent,
+				'aiPreparedSummary.editablePoints':   briefing.discussionPoints || [
+					'Review abnormal values from recent labs',
+					'Check interactions with current medications',
+					'Discuss lifestyle changes mentioned in history'
+				],
+				'aiPreparedSummary.generatedAt':      new Date(),
+				'aiPreparedSummary.isLocked':         false,
+				'aiPreparedSummary.sharedWithDoctor': false
+			}
+		};
+		if (medicineObjects.length > 0) {
+			updatePayload.$set['consultationRecords.medicines'] = medicineObjects;
+			console.log(`[AI] Auto-populated ${medicineObjects.length} medicines for pharmacy cart`);
+		}
+		await AppointmentModel.findByIdAndUpdate(id, updatePayload);
 
 		res.json({
 			success: true,
 			data: {
-				summary: summaryResult.summary,
-				editablePoints: summaryResult.keyPoints || [],
-				medications: summaryResult.medications || [],
-				labFindings: summaryResult.labFindings || [],
-				riskLevel: summaryResult.riskLevel || 'unknown',
-				isLocked: false,
-				sharedWithDoctor: false,
+				summary:        summaryContent,
+				riskLevel:      briefing.riskLevel      || 'unknown',
+				conditions:     briefing.conditions     || [],
+				concerns:       briefing.concerns       || [],
+				labFindings:    briefing.labFindings    || [],
+				medsFound:      extractedMeds,
+				editablePoints: briefing.discussionPoints || [
+					'Review abnormal values from recent labs',
+					'Check interactions with current medications',
+					'Discuss lifestyle changes mentioned in history'
+				],
+				isLocked:    false,
 				generatedAt: new Date().toISOString(),
-				disclaimer: summaryResult.disclaimer
+				engine:      'ollama'
 			}
 		});
 
 	} catch (error) {
 		console.error('Get AI summary error:', error.message);
-		if (error.message?.includes('GEMINI_API_KEY')) {
-			return res.status(503).json({ success: false, error: 'AI service not configured.' });
-		}
-		if (error.message?.includes('API_KEY_INVALID') || error.message?.includes('403')) {
-			return res.status(503).json({ success: false, error: 'Gemini API key is invalid or expired. Please rotate it at https://aistudio.google.com' });
-		}
-		res.status(500).json({ success: false, error: 'Failed to generate AI summary' });
+		res.status(500).json({ success: false, error: 'AI Engine unavailable. Ensure Ollama is running: ollama serve' });
 	}
 }
 

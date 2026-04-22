@@ -1,12 +1,41 @@
 import { useState, useEffect } from 'react';
+import { jsPDF } from 'jspdf';
 import ConsultationChatbot from './ConsultationChatbot.jsx';
 import apiService from '../../services/api.js';
+
+const MEDICAL_TERMS = [
+	'Diabetes', 'Hypertension', 'Ultrasound', 'Glucose', 'Positive', 'Negative',
+	'Acute', 'Chronic', 'Fever', 'Infection', 'Inflammation', 'Anemia', 'Thyroid',
+	'Cholesterol', 'Hemoglobin', 'Platelet', 'Biopsy', 'Fracture', 'Tumor',
+	'Malignant', 'Benign', 'Cardiac', 'Pulmonary', 'Renal', 'Hepatic', 'Insulin',
+	'Antibiotics', 'Steroids', 'Dosage', 'Prescription', 'Diagnosis', 'Prognosis',
+	'Symptoms', 'Treatment', 'Surgery', 'Radiology', 'Pathology', 'Oncology',
+	'Neurology', 'Orthopedic', 'Pediatric', 'Geriatric', 'Allergy', 'Asthma',
+	'Normal', 'Abnormal', 'Critical', 'Stable'
+];
+
+function HighlightText({ text }) {
+	if (!text) return null;
+	const regex = new RegExp(`\\b(${MEDICAL_TERMS.join('|')})\\b`, 'gi');
+	const parts = text.split(regex);
+	return (
+		<p className="text-sm leading-relaxed">
+			{parts.map((part, i) =>
+				MEDICAL_TERMS.some(t => t.toLowerCase() === part.toLowerCase()) ? (
+					<span key={i} className="bg-sky-100 text-sky-700 px-1 rounded font-bold">{part}</span>
+				) : part
+			)}
+		</p>
+	);
+}
 
 export default function ConsultationRecords({ appointment, onBack }) {
 	const [records, setRecords] = useState(null);
 	const [loading, setLoading] = useState(true);
 	const [activeSection, setActiveSection] = useState('summary');
 	const [transcriptExpanded, setTranscriptExpanded] = useState(false);
+	const [bartSummary, setBartSummary] = useState('');
+	const [bartLoading, setBartLoading] = useState(false);
 
 	const doctorName = typeof appointment.doctor === 'object' ? appointment.doctor.name : appointment.doctor;
 
@@ -22,7 +51,6 @@ export default function ConsultationRecords({ appointment, onBack }) {
 				setRecords(res.data);
 			}
 		} catch (err) {
-			// Use embedded data from appointment as fallback
 			setRecords({
 				meetingSummary: appointment.consultationRecords?.meetingSummary || 'Summary will be available once the AI processes the consultation.',
 				meetingTranscript: appointment.consultationRecords?.meetingTranscript || '',
@@ -33,6 +61,62 @@ export default function ConsultationRecords({ appointment, onBack }) {
 		} finally {
 			setLoading(false);
 		}
+	}
+
+	async function handleBartSummary() {
+		setBartLoading(true);
+		try {
+			const res = await apiService.request('/ai/bart-summary', {
+				method: 'POST',
+				body: JSON.stringify({ text: records.meetingSummary })
+			});
+			if (res.success) setBartSummary(res.summary);
+		} catch (e) {
+			console.error('BART error:', e);
+		} finally {
+			setBartLoading(false);
+		}
+	}
+
+	function handleDownloadPDF() {
+		const doc = new jsPDF();
+
+		// Header bar
+		doc.setFillColor(40, 116, 240);
+		doc.rect(0, 0, 210, 28, 'F');
+		doc.setFontSize(18);
+		doc.setTextColor(255, 255, 255);
+		doc.text('ClinIQ AI Medical Summary', 14, 18);
+
+		// Patient / Doctor info
+		doc.setFontSize(10);
+		doc.setTextColor(80, 80, 80);
+		doc.text(`Doctor: ${doctorName}`, 14, 38);
+		doc.text(`Date: ${appointment.date} at ${appointment.startTime}`, 14, 45);
+		doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 52);
+
+		// Divider
+		doc.setDrawColor(40, 116, 240);
+		doc.setLineWidth(0.5);
+		doc.line(14, 57, 196, 57);
+
+		// Section title
+		doc.setFontSize(12);
+		doc.setTextColor(40, 116, 240);
+		doc.text('Clinical Findings (BART Abstractive Summary):', 14, 65);
+
+		// Summary body
+		doc.setFontSize(10);
+		doc.setTextColor(30, 30, 30);
+		const lines = doc.splitTextToSize(bartSummary, 178);
+		doc.text(lines, 14, 74);
+
+		// Disclaimer footer
+		doc.setFontSize(8);
+		doc.setTextColor(150, 150, 150);
+		doc.text('Note: This is an AI-generated summary (facebook/bart-large-cnn). Please consult your physician.', 14, 284);
+
+		doc.save(`ClinIQ_Summary_${Date.now()}.pdf`);
 	}
 
 	const sections = [
@@ -98,19 +182,47 @@ export default function ConsultationRecords({ appointment, onBack }) {
 					<div className="flex items-center gap-2 mb-4">
 						<span className="text-xl">🧠</span>
 						<h3 className="font-semibold text-text-primary">AI Meeting Summary</h3>
-						<span className="badge-ai text-[10px]">Gemini AI</span>
+						<span className="badge-ai text-[10px]">BART AI</span>
 					</div>
 
 					{records?.meetingSummary ? (
 						<div className="prose prose-sm max-w-none">
-							<p className="text-sm text-text-primary leading-relaxed whitespace-pre-wrap">
-								{records.meetingSummary}
-							</p>
+							<HighlightText text={records.meetingSummary} />
 						</div>
 					) : (
 						<div className="text-center py-8 text-text-secondary text-sm">
 							<span className="text-3xl block mb-2 opacity-60">📝</span>
 							Summary will be available once AI finishes processing.
+						</div>
+					)}
+
+					{/* BART Summary Section */}
+					{records?.meetingSummary && (
+						<div className="mt-4 border-t border-gray-100 pt-4">
+							<div className="flex items-center gap-2 mb-2">
+								<span className="text-base">🤖</span>
+								<span className="text-sm font-semibold text-text-primary">BART Abstractive Summary</span>
+								<span className="badge-ai text-[10px]">facebook/bart-large-cnn</span>
+							</div>
+							{bartSummary ? (
+								<>
+									<HighlightText text={bartSummary} />
+									<button
+										onClick={handleDownloadPDF}
+										className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary-600 text-white text-xs rounded-clinical hover:bg-primary-700 transition-colors"
+									>
+										📥 Download PDF
+									</button>
+								</>
+							) : (
+								<button
+									onClick={handleBartSummary}
+									disabled={bartLoading}
+									className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 text-white text-xs rounded-clinical hover:bg-sky-700 transition-colors disabled:opacity-60"
+								>
+									{bartLoading ? '⏳ Generating...' : '✨ Generate BART Summary'}
+								</button>
+							)}
 						</div>
 					)}
 
@@ -123,7 +235,6 @@ export default function ConsultationRecords({ appointment, onBack }) {
 			{/* ── Prescription ────────────────────────────────────────────────── */}
 			{activeSection === 'prescription' && (
 				<div className="space-y-5 animate-fade-in">
-					{/* Prescription Image/PDF */}
 					{records?.prescriptionImageUrl && (
 						<div className="card">
 							<h3 className="font-semibold text-text-primary mb-4 flex items-center gap-2">
@@ -146,7 +257,6 @@ export default function ConsultationRecords({ appointment, onBack }) {
 						</div>
 					)}
 
-					{/* Structured Medicines List */}
 					<div className="card overflow-hidden p-0">
 						<div className="px-6 py-4 border-b border-gray-100 flex items-center gap-2">
 							<span className="text-lg">💊</span>

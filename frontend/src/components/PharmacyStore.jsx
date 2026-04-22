@@ -30,6 +30,9 @@ export default function PharmacyStore() {
 	const [loading, setLoading]               = useState(true);
 	const [actionLoading, setActionLoading]   = useState('');
 	const [search, setSearch]                 = useState('');
+	const [extUploading, setExtUploading]     = useState(false);
+	const [reviewMeds, setReviewMeds]         = useState([]);
+	const [reviewSummary, setReviewSummary]   = useState('');
 
 	const loadData = useCallback(async () => {
 		setLoading(true);
@@ -61,6 +64,46 @@ export default function PharmacyStore() {
 
 	function removeFromCart(id) {
 		setManualCart(prev => prev.filter(i => i._id !== id));
+	}
+
+	async function handleExtPrescriptionUpload(e) {
+		const file = e.target.files?.[0];
+		if (!file) return;
+		e.target.value = '';
+		setExtUploading(true);
+		setReviewMeds([]);
+		try {
+			const fd = new FormData();
+			fd.append('file', file);
+			const res = await apiService.uploadExternalPrescription(fd);
+			if (res.success) {
+				// Use matched inventory products (with real price/id) + unmatched names
+				const matched   = (res.data.matchedProducts || []).map(p => ({ ...p, qty: 1, inInventory: true }));
+				const unmatched = (res.data.unmatched || []).map(name => ({ _id: `ext-${name}`, name, price: 0, qty: 1, inInventory: false }));
+				setReviewMeds([...matched, ...unmatched]);
+				setReviewSummary(res.data.summary || '');
+			}
+		} catch (err) {
+			console.error('External prescription upload failed:', err.message);
+		} finally {
+			setExtUploading(false);
+		}
+	}
+
+	function removeReviewMed(i) {
+		setReviewMeds(prev => prev.filter((_, idx) => idx !== i));
+	}
+
+	function confirmReviewMeds() {
+		setManualCart(prev => {
+			const toAdd = reviewMeds
+				.filter(item => !prev.find(i => i._id === item._id))
+				.map(item => ({ ...item, qty: item.qty || 1 }));
+			return [...prev, ...toAdd];
+		});
+		setReviewMeds([]);
+		setReviewSummary('');
+		setCartOpen(true);
 	}
 
 	async function handleDeselect(orderId, idx, current) {
@@ -110,6 +153,50 @@ export default function PharmacyStore() {
 					)}
 				</button>
 			</div>
+
+			{/* External Prescription Upload */}
+			<div className="border-2 border-dashed border-gray-200 hover:border-primary-300 rounded-clinical p-5 text-center transition-colors">
+				<span className="text-3xl block mb-2">📄</span>
+				<p className="text-sm font-semibold text-text-primary mb-1">Have a prescription from another doctor?</p>
+				<p className="text-xs text-text-secondary mb-3">Upload it — our AI will extract the medicines for you to review before ordering.</p>
+				<label className="btn-primary btn-sm cursor-pointer inline-flex items-center gap-2">
+					{extUploading ? (
+						<><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />AI reading prescription...</>
+					) : '📤 Upload Prescription'}
+					<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" disabled={extUploading} onChange={handleExtPrescriptionUpload} />
+				</label>
+			</div>
+
+			{/* AI Review Modal */}
+			{reviewMeds.length > 0 && (
+				<div className="card border border-sky-200 bg-sky-50 animate-fade-in">
+					<div className="flex items-center gap-2 mb-3">
+						<span className="text-lg">🤖</span>
+						<h4 className="font-semibold text-sky-800 text-sm">AI Extracted These Medicines — Please Verify</h4>
+					</div>
+					{reviewSummary && (
+						<p className="text-xs text-sky-700 bg-sky-100 rounded-clinical p-2 mb-3 leading-relaxed">{reviewSummary}</p>
+					)}
+					<div className="space-y-1.5 mb-4">
+						{reviewMeds.map((med, i) => (
+							<div key={i} className="flex items-center justify-between p-2 bg-white rounded-clinical border border-sky-100 text-sm">
+								<div>
+									<span className="font-medium text-text-primary">{med.name}</span>
+									{med.inInventory
+										? <span className="ml-2 text-xs text-success-600 font-semibold">₹{med.price} ✓ In Stock</span>
+										: <span className="ml-2 text-xs text-amber-500">Not in store</span>
+									}
+								</div>
+								<button onClick={() => removeReviewMed(i)} className="text-danger-400 hover:text-danger-600 text-xs px-2">✕ Remove</button>
+							</div>
+						))}
+					</div>
+					<div className="flex gap-2">
+						<button onClick={() => { setReviewMeds([]); setReviewSummary(''); }} className="btn-ghost btn-sm flex-1 text-xs">Cancel</button>
+						<button onClick={confirmReviewMeds} className="btn-primary btn-sm flex-1 text-xs">✅ Confirm & Add to Cart</button>
+					</div>
+				</div>
+			)}
 
 			{/* Prescription Alert Banner */}
 			{prescriptionCart && (
