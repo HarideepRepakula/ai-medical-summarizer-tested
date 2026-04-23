@@ -44,7 +44,7 @@ async function processRecordInBackground(filePath, patientId, recordId, fileType
 		if (ocrText.length < 20) {
 			console.warn('[RECORDS] Extracted text too short, saving minimal summary for:', fileName);
 			await MedicalRecordModel.findByIdAndUpdate(recordId, {
-				aiSummary:            `File "${fileName}" uploaded. Text extraction yielded minimal content — this may be a scanned image with low quality or a non-text document.`,
+				aiSummary:            `File "${fileName}" uploaded. Our AI could not read any text in this document. If this is a scanned PDF or a photograph inside a PDF, please upload it directly as an image file (JPG or PNG) so our OCR engine can read it.`,
 				aiSummaryGeneratedAt: new Date(),
 			});
 			return;

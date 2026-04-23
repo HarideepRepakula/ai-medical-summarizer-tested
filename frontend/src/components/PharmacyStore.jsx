@@ -33,6 +33,7 @@ export default function PharmacyStore() {
 	const [extUploading, setExtUploading]     = useState(false);
 	const [reviewMeds, setReviewMeds]         = useState([]);
 	const [reviewSummary, setReviewSummary]   = useState('');
+	const [uploadError, setUploadError]       = useState('');
 
 	const loadData = useCallback(async () => {
 		setLoading(true);
@@ -72,19 +73,29 @@ export default function PharmacyStore() {
 		e.target.value = '';
 		setExtUploading(true);
 		setReviewMeds([]);
+		setUploadError('');
 		try {
 			const fd = new FormData();
 			fd.append('file', file);
 			const res = await apiService.uploadExternalPrescription(fd);
-			if (res.success) {
-				// Use matched inventory products (with real price/id) + unmatched names
-				const matched   = (res.data.matchedProducts || []).map(p => ({ ...p, qty: 1, inInventory: true }));
-				const unmatched = (res.data.unmatched || []).map(name => ({ _id: `ext-${name}`, name, price: 0, qty: 1, inInventory: false }));
-				setReviewMeds([...matched, ...unmatched]);
-				setReviewSummary(res.data.summary || '');
+			if (res.success && res.data.medicines?.length > 0) {
+				// Build cart items from the raw names the AI extracted
+				const items = res.data.medicines.map((name, idx) => ({
+					_id:   `rx-${Date.now()}-${idx}`,
+					name,
+					price: 0,
+					qty:   1,
+					fromPrescription: true,
+				}));
+				setReviewMeds(items);
+				setReviewSummary(res.message || '');
 			}
 		} catch (err) {
-			console.error('External prescription upload failed:', err.message);
+			const msg = err.message || 'Upload failed';
+			setUploadError(msg.includes('422') || msg.includes('extract') || msg.includes('detect')
+				? 'Could not read this file. Please upload a clearer JPG/PNG photo of the prescription or a digital PDF.'
+				: `Upload error: ${msg}`);
+			console.error('Prescription upload failed:', err.message);
 		} finally {
 			setExtUploading(false);
 		}
@@ -94,15 +105,15 @@ export default function PharmacyStore() {
 		setReviewMeds(prev => prev.filter((_, idx) => idx !== i));
 	}
 
-	function confirmReviewMeds() {
+	function addAllToCart() {
 		setManualCart(prev => {
-			const toAdd = reviewMeds
-				.filter(item => !prev.find(i => i._id === item._id))
-				.map(item => ({ ...item, qty: item.qty || 1 }));
+			const existing = new Set(prev.map(i => i._id));
+			const toAdd = reviewMeds.filter(m => !existing.has(m._id));
 			return [...prev, ...toAdd];
 		});
 		setReviewMeds([]);
 		setReviewSummary('');
+		setUploadError('');
 		setCartOpen(true);
 	}
 
@@ -158,42 +169,49 @@ export default function PharmacyStore() {
 			<div className="border-2 border-dashed border-gray-200 hover:border-primary-300 rounded-clinical p-5 text-center transition-colors">
 				<span className="text-3xl block mb-2">📄</span>
 				<p className="text-sm font-semibold text-text-primary mb-1">Have a prescription from another doctor?</p>
-				<p className="text-xs text-text-secondary mb-3">Upload it — our AI will extract the medicines for you to review before ordering.</p>
+				<p className="text-xs text-text-secondary mb-3">Upload a JPG, PNG, or digital PDF — our AI will extract the medicines and add them to your cart.</p>
 				<label className="btn-primary btn-sm cursor-pointer inline-flex items-center gap-2">
 					{extUploading ? (
 						<><div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />AI reading prescription...</>
 					) : '📤 Upload Prescription'}
 					<input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" disabled={extUploading} onChange={handleExtPrescriptionUpload} />
 				</label>
+				{uploadError && (
+					<div className="mt-3 flex items-start gap-2 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-left">
+						<span className="text-red-500 shrink-0">⚠️</span>
+						<p className="text-xs text-red-700 leading-relaxed">{uploadError}</p>
+						<button onClick={() => setUploadError('')} className="ml-auto shrink-0 text-red-400 hover:text-red-600 text-xs font-bold">✕</button>
+					</div>
+				)}
 			</div>
 
-			{/* AI Review Modal */}
+			{/* AI Prescription Review — simplified, no inventory check */}
 			{reviewMeds.length > 0 && (
 				<div className="card border border-sky-200 bg-sky-50 animate-fade-in">
-					<div className="flex items-center gap-2 mb-3">
-						<span className="text-lg">🤖</span>
-						<h4 className="font-semibold text-sky-800 text-sm">AI Extracted These Medicines — Please Verify</h4>
+					<div className="flex items-center justify-between mb-3">
+						<div className="flex items-center gap-2">
+							<span className="text-lg">🤖</span>
+							<h4 className="font-semibold text-sky-800 text-sm">AI Read Your Prescription</h4>
+						</div>
+						<span className="text-xs text-sky-600 font-medium">{reviewMeds.length} medicine{reviewMeds.length !== 1 ? 's' : ''} found</span>
 					</div>
 					{reviewSummary && (
-						<p className="text-xs text-sky-700 bg-sky-100 rounded-clinical p-2 mb-3 leading-relaxed">{reviewSummary}</p>
+						<p className="text-xs text-sky-700 bg-sky-100 rounded-lg p-2 mb-3">{reviewSummary}</p>
 					)}
 					<div className="space-y-1.5 mb-4">
 						{reviewMeds.map((med, i) => (
-							<div key={i} className="flex items-center justify-between p-2 bg-white rounded-clinical border border-sky-100 text-sm">
-								<div>
+							<div key={med._id} className="flex items-center justify-between px-3 py-2 bg-white rounded-lg border border-sky-100 text-sm">
+								<div className="flex items-center gap-2">
+									<span className="text-base">💊</span>
 									<span className="font-medium text-text-primary">{med.name}</span>
-									{med.inInventory
-										? <span className="ml-2 text-xs text-success-600 font-semibold">₹{med.price} ✓ In Stock</span>
-										: <span className="ml-2 text-xs text-amber-500">Not in store</span>
-									}
 								</div>
-								<button onClick={() => removeReviewMed(i)} className="text-danger-400 hover:text-danger-600 text-xs px-2">✕ Remove</button>
+								<button onClick={() => removeReviewMed(i)} className="text-danger-400 hover:text-danger-600 text-xs px-2">✕</button>
 							</div>
 						))}
 					</div>
 					<div className="flex gap-2">
-						<button onClick={() => { setReviewMeds([]); setReviewSummary(''); }} className="btn-ghost btn-sm flex-1 text-xs">Cancel</button>
-						<button onClick={confirmReviewMeds} className="btn-primary btn-sm flex-1 text-xs">✅ Confirm & Add to Cart</button>
+						<button onClick={() => { setReviewMeds([]); setReviewSummary(''); setUploadError(''); }} className="btn-ghost btn-sm flex-1 text-xs">Cancel</button>
+						<button onClick={addAllToCart} className="btn-primary btn-sm flex-1 text-xs">🛒 Add All to Cart</button>
 					</div>
 				</div>
 			)}
@@ -323,19 +341,27 @@ export default function PharmacyStore() {
 								</div>
 							)}
 
-							{/* Manual Cart Section */}
+							{/* Manual Cart Section (includes Rx items from prescription upload) */}
 							{manualCart.length > 0 && (
 								<div>
-									<p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">🛍️ Manual Items</p>
+									<p className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">🛍️ Your Items</p>
 									<div className="space-y-2">
 										{manualCart.map(item => (
 											<div key={item._id} className="flex items-center justify-between p-2 rounded-lg border border-gray-100 bg-white text-sm">
-												<div>
-													<p className="font-medium text-xs text-text-primary">{item.name}</p>
+												<div className="flex-1 min-w-0">
+													<div className="flex items-center gap-1.5">
+														{item.fromPrescription && (
+															<span className="text-[9px] font-bold bg-sky-100 text-sky-700 px-1 py-0.5 rounded">Rx</span>
+														)}
+														<p className="font-medium text-xs text-text-primary truncate">{item.name}</p>
+													</div>
 													<p className="text-[10px] text-text-secondary">Qty: {item.qty}</p>
 												</div>
-												<div className="flex items-center gap-2">
-													<span className="text-xs font-semibold">₹{item.price * item.qty}</span>
+												<div className="flex items-center gap-2 shrink-0">
+													{item.fromPrescription
+														? <span className="text-[10px] text-sky-600 font-medium">Price at pharmacy</span>
+														: <span className="text-xs font-semibold">₹{item.price * item.qty}</span>
+													}
 													<button onClick={() => removeFromCart(item._id)} className="text-danger-400 hover:text-danger-600 text-xs">✕</button>
 												</div>
 											</div>
@@ -356,9 +382,14 @@ export default function PharmacyStore() {
 						{totalItems > 0 && (
 							<div className="border-t border-gray-100 p-4 space-y-3">
 								<div className="flex items-center justify-between">
-									<span className="text-sm text-text-secondary">Grand Total</span>
+									<span className="text-sm text-text-secondary">
+										{manualCart.some(i => i.fromPrescription) ? 'Subtotal (excl. Rx)' : 'Grand Total'}
+									</span>
 									<span className="text-lg font-bold text-primary-700">₹{grandTotal.toFixed(2)}</span>
 								</div>
+								{manualCart.some(i => i.fromPrescription) && (
+									<p className="text-[10px] text-sky-600">💊 Rx items will be priced at the pharmacy counter.</p>
+								)}
 								{prescriptionCart && (
 									<button
 										onClick={handleConfirm}
@@ -370,7 +401,7 @@ export default function PharmacyStore() {
 										) : '✅ Confirm & Deliver'}
 									</button>
 								)}
-								{manualCart.length > 0 && !prescriptionCart && (
+								{manualCart.length > 0 && (
 									<button className="btn-primary w-full">✅ Place Order</button>
 								)}
 							</div>

@@ -103,7 +103,7 @@ export default function ConsultationRecords({ appointment, onBack }) {
 		// Section title
 		doc.setFontSize(12);
 		doc.setTextColor(40, 116, 240);
-		doc.text('Clinical Findings (BART Abstractive Summary):', 14, 65);
+		doc.text('Clinical Findings (Llama 3.2 Abstractive Summary):', 14, 65);
 
 		// Summary body
 		doc.setFontSize(10);
@@ -114,7 +114,7 @@ export default function ConsultationRecords({ appointment, onBack }) {
 		// Disclaimer footer
 		doc.setFontSize(8);
 		doc.setTextColor(150, 150, 150);
-		doc.text('Note: This is an AI-generated summary (facebook/bart-large-cnn). Please consult your physician.', 14, 284);
+		doc.text('Note: This is an AI-generated summary (Ollama Llama 3.2). Please consult your physician.', 14, 284);
 
 		doc.save(`ClinIQ_Summary_${Date.now()}.pdf`);
 	}
@@ -182,7 +182,7 @@ export default function ConsultationRecords({ appointment, onBack }) {
 					<div className="flex items-center gap-2 mb-4">
 						<span className="text-xl">🧠</span>
 						<h3 className="font-semibold text-text-primary">AI Meeting Summary</h3>
-						<span className="badge-ai text-[10px]">BART AI</span>
+						<span className="badge-ai text-[10px]">Llama 3.2 AI</span>
 					</div>
 
 					{records?.meetingSummary ? (
@@ -201,8 +201,8 @@ export default function ConsultationRecords({ appointment, onBack }) {
 						<div className="mt-4 border-t border-gray-100 pt-4">
 							<div className="flex items-center gap-2 mb-2">
 								<span className="text-base">🤖</span>
-								<span className="text-sm font-semibold text-text-primary">BART Abstractive Summary</span>
-								<span className="badge-ai text-[10px]">facebook/bart-large-cnn</span>
+								<span className="text-sm font-semibold text-text-primary">Llama 3.2 Abstractive Summary</span>
+								<span className="badge-ai text-[10px]">ollama/llama3.2</span>
 							</div>
 							{bartSummary ? (
 								<>
@@ -220,7 +220,7 @@ export default function ConsultationRecords({ appointment, onBack }) {
 									disabled={bartLoading}
 									className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-sky-600 text-white text-xs rounded-clinical hover:bg-sky-700 transition-colors disabled:opacity-60"
 								>
-									{bartLoading ? '⏳ Generating...' : '✨ Generate BART Summary'}
+									{bartLoading ? '⏳ Generating...' : '✨ Generate Llama 3.2 Summary'}
 								</button>
 							)}
 						</div>

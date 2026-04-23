@@ -124,8 +124,8 @@ async function smartMatchMedicines(medNames) {
 /**
  * POST /api/pharmacy/upload-prescription
  * Patient uploads an external prescription image/PDF.
- * Uses Tesseract OCR + Ollama extractMedicationsFromText() — replaces BART bridge.
- * Patient must confirm before cart is created.
+ * Uses Tesseract OCR + Ollama to extract medicine names, then returns them
+ * directly — NO inventory matching. Frontend adds all to cart immediately.
  */
 export async function uploadExternalPrescription(req, res) {
 	try {
@@ -143,7 +143,7 @@ export async function uploadExternalPrescription(req, res) {
 			console.error('[PHARMACY] Extraction failed:', ocrErr.message);
 		}
 
-		// Cleanup uploaded file
+		// Cleanup uploaded file immediately after reading
 		try { await fs.unlink(req.file.path); } catch {}
 
 		if (ocrText.length < 10) {
@@ -153,50 +153,30 @@ export async function uploadExternalPrescription(req, res) {
 			});
 		}
 
-		// Step 2: Extract medicine names using Ollama (replaces BART)
+		// Step 2: Extract medicine names using Ollama
 		console.log('[PHARMACY] Extracting medicine names via Ollama...');
-		const extractedNames = await extractMedicationsFromText(ocrText);
-		console.log(`[PHARMACY] Ollama extracted ${extractedNames.length} medicines:`, extractedNames);
+		const medicines = await extractMedicationsFromText(ocrText);
+		console.log(`[PHARMACY] Extracted ${medicines.length} medicines:`, medicines);
 
-		if (extractedNames.length === 0) {
-			return res.json({
-				success: true,
-				message: "No medicines could be detected. Please verify manually.",
-				data: {
-					matchedProducts: [],
-					unmatched:       [],
-					extractedMeds:   [],
-					summary:         ocrText.substring(0, 300)
-				}
+		if (medicines.length === 0) {
+			return res.status(422).json({
+				success: false,
+				error: "No medicines could be detected in this prescription. Please try a clearer image."
 			});
 		}
 
-		// Step 3: 3-Layer smart matching against inventory
-		const { matched, unmatched } = await smartMatchMedicines(extractedNames);
-
+		// Return the raw list — no inventory check, frontend adds all directly to cart
 		res.json({
 			success: true,
-			message: `AI detected ${extractedNames.length} medicine(s). ${matched.length} matched in inventory. Please verify before adding to cart.`,
+			message: `Found ${medicines.length} medicine(s) in prescription.`,
 			data: {
-				matchedProducts: matched.map(m => ({
-					_id:        m.inventoryItem._id,
-					name:       m.inventoryItem.name,
-					price:      m.inventoryItem.price,
-					stock:      m.inventoryItem.stock,
-					category:   m.inventoryItem.category,
-					image:      m.inventoryItem.image || null,
-					matchLayer: m.matchLayer,          // 1 = exact, 2 = AI fuzzy
-					prescribedAs: m.originalName       // what the doctor wrote
-				})),
-				unmatched,
-				extractedMeds: extractedNames,
-				summary: `Prescription processed. Found: ${extractedNames.join(', ')}.`
+				medicines,                          // string[] — exactly what the doctor wrote
+				ocrPreview: ocrText.substring(0, 300)
 			}
 		});
 
 	} catch (error) {
 		console.error("Upload external prescription error:", error.message);
-		// Cleanup file on error
 		if (req.file?.path) try { await fs.unlink(req.file.path); } catch {}
 		res.status(500).json({ success: false, error: "Failed to process prescription." });
 	}

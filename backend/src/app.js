@@ -13,17 +13,19 @@ const app = express();
 
 // Enhanced security middleware
 app.use(helmet({
+	crossOriginResourcePolicy: { policy: "cross-origin" },
+	xFrameOptions: false,
 	contentSecurityPolicy: {
 		directives: {
 			defaultSrc: ["'self'"],
 			styleSrc: ["'self'", "'unsafe-inline'"],
 			scriptSrc: ["'self'"],
-			imgSrc: ["'self'", "data:", "https:", "http://localhost:4000"],
-			connectSrc: ["'self'", "http://localhost:4000"],
+			imgSrc: ["'self'", "data:", "https:", "http://localhost:4000", "http://127.0.0.1:4000"],
+			connectSrc: ["'self'", "http://localhost:4000", "http://127.0.0.1:4000"],
 			fontSrc: ["'self'"],
-			objectSrc: ["'none'"],
 			mediaSrc: ["'self'"],
-			frameSrc: ["'none'"]
+			frameSrc: ["'self'", "http://localhost:5173", "http://127.0.0.1:5173"],
+			frameAncestors: ["'self'", "http://localhost:5173", "http://127.0.0.1:5173"]
 		}
 	},
 	hsts: {
